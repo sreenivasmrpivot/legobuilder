@@ -1,9 +1,8 @@
-# Low-Level Design: NFR-SEC-002 — Content Security Policy Enforcement
+# Low-Level Design: NFR-SEC-002 — Enforce Content Security Policy Headers
 
 **FR-ID:** NFR-SEC-002  
 **Issue:** [#31](https://github.com/sreenivasmrpivot/legobuilder/issues/31)  
-**Title:** Enforce Content Security Policy headers; eliminate inline scripts and eval()  
-**Author:** Design Agent (Spectra Framework)  
+**Author:** Spectra Design Agent  
 **Status:** Draft — Awaiting Gate 6a Human Review  
 **Date:** 2026-04-11  
 
@@ -11,69 +10,109 @@
 
 ## 1. Overview
 
-This document provides the Low-Level Design for enforcing a strict Content Security Policy (CSP) across the LegoBuilder frontend SPA. LegoBuilder is a pure client-side React + Vite + TypeScript application served via Nginx. There is no backend API server; all HTTP response headers must be injected at the Nginx layer.
+This document specifies the low-level design for enforcing a Content Security Policy (CSP) across the LegoBuilder frontend application. The goal is to prevent Cross-Site Scripting (XSS) attacks by:
 
-The NFR mandates:
-- CSP headers SHALL prevent XSS attacks.
-- Zero inline `<script>` tags in the built HTML output.
-- Zero `eval()` or equivalent dynamic code execution (`new Function()`, `setTimeout(string)`, etc.).
-- Validated via CSP header audit and automated scan in CI.
+1. Delivering strict `Content-Security-Policy` HTTP response headers via nginx.
+2. Eliminating all inline `<script>` blocks and `style` attributes from `index.html` and React components.
+3. Prohibiting `eval()`, `new Function()`, and equivalent dynamic code execution.
+4. Configuring Vite's build pipeline to emit a nonce-compatible or hash-based CSP for any unavoidable inline content.
+5. Providing an automated audit mechanism (Playwright E2E + CSP report-only mode) to detect regressions.
 
----
-
-## 2. Architecture Context
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     LegoBuilder SPA Stack                       │
-│                                                                 │
-│  Browser ──► Nginx (Docker) ──► /usr/share/nginx/html/         │
-│                │                  index.html                    │
-│                │                  assets/index-[hash].js        │
-│                │                  assets/index-[hash].css       │
-│                │                                                │
-│                └── HTTP Response Headers (nginx.conf)           │
-│                     Content-Security-Policy: ...                │
-│                     X-Content-Type-Options: nosniff             │
-│                     X-Frame-Options: DENY                       │
-│                     Referrer-Policy: strict-origin-when-...     │
-└─────────────────────────────────────────────────────────────────┘
-
- Build Pipeline:
-  Source (TSX/TS) ──► Vite Build ──► Hashed JS/CSS bundles
-                                      (no inline scripts)
-                                      (no eval())
-```
-
-**Key architectural facts:**
-- Vite produces fully hashed, external JS/CSS bundles — no inline scripts by default.
-- The `index.html` entry point contains only a `<script type="module" src="...">` tag (external, not inline).
-- Nginx serves the static build output and injects all security headers.
-- No server-side rendering; no dynamic HTML generation.
+The application is a **client-side SPA** (Vite + React + TypeScript + Three.js) served by **nginx** inside Docker. There is no backend API server; all CSP enforcement is at the nginx layer.
 
 ---
 
-## 3. CSP Policy Design
+## 2. Acceptance Criteria Mapping
 
-### 3.1 Directive Specification
+| # | Criterion | Verification Method |
+|---|-----------|-------------------|
+| AC-1 | Zero inline `<script>` tags in built HTML output | Playwright CSP audit test |
+| AC-2 | Zero inline `style="..."` attributes that violate `style-src` | ESLint `no-inline-styles` rule + Playwright |
+| AC-3 | `eval()` and `new Function()` absent from production bundle | ESLint `no-eval` rule + bundle analysis |
+| AC-4 | `Content-Security-Policy` header present on all responses | Playwright response header assertion |
+| AC-5 | CSP header contains `default-src 'self'` as base directive | Header value assertion |
+| AC-6 | No CSP violations reported in browser console during E2E tests | Playwright console listener |
 
-| Directive | Value | Rationale |
-|-----------|-------|----------|
-| `default-src` | `'self'` | Deny all unlisted resource types from external origins |
-| `script-src` | `'self'` | Allow only same-origin scripts; no `'unsafe-inline'`, no `'unsafe-eval'` |
-| `style-src` | `'self' 'unsafe-inline'` | Tailwind CSS injects runtime styles; inline styles required (see §3.2) |
-| `img-src` | `'self' data: blob:` | Allow same-origin images, data URIs (canvas exports), and blob URLs |
-| `font-src` | `'self'` | Fonts served from same origin only |
-| `connect-src` | `'self'` | XHR/fetch restricted to same origin (no external APIs) |
-| `media-src` | `'none'` | No audio/video content |
-| `object-src` | `'none'` | Block Flash/plugins entirely |
-| `frame-src` | `'none'` | No iframes |
-| `frame-ancestors` | `'none'` | Prevent clickjacking (supersedes X-Frame-Options) |
-| `base-uri` | `'self'` | Prevent base tag injection |
-| `form-action` | `'self'` | Restrict form submissions to same origin |
-| `upgrade-insecure-requests` | (present) | Force HTTPS for all sub-resources |
+---
 
-**Full CSP header value:**
+## 3. Architecture Context
+
+```
++----------------------------------------------------------+
+|                    Docker Container                       |
+|  +------------------------------------------------------+|
+|  |                    nginx:alpine                      ||
+|  |                                                      ||
+|  |  nginx.conf --> add_header Content-Security-Policy   ||
+|  |                 add_header X-Content-Type-Options    ||
+|  |                 add_header X-Frame-Options           ||
+|  |                 add_header Referrer-Policy           ||
+|  |                                                      ||
+|  |  /usr/share/nginx/html/                              ||
+|  |    index.html  (NO inline scripts)                   ||
+|  |    assets/     (hashed JS/CSS bundles)               ||
+|  +------------------------------------------------------+|
+|                                                           |
+|  +------------------------------------------------------+|
+|  |              Vite Build Pipeline                     ||
+|  |                                                      ||
+|  |  vite.config.ts --> no inline scripts in output     ||
+|  |  eslint.config.js --> no-eval, no-inline-styles     ||
+|  +------------------------------------------------------+|
++----------------------------------------------------------+
+```
+
+**Key constraint:** Three.js / WebGL requires `worker-src blob:` for certain shader compilation paths. The CSP must accommodate this without opening `unsafe-eval`.
+
+---
+
+## 4. Component Architecture
+
+### 4.1 Modified Files
+
+| File | Change Type | Reason |
+|------|-------------|--------|
+| `frontend/nginx.conf` | MODIFIED | Add CSP and security headers |
+| `frontend/index.html` | MODIFIED | Remove any inline scripts/styles; add `<meta http-equiv>` fallback |
+| `frontend/vite.config.ts` | MODIFIED | Ensure no `inline` script injection; configure `build.cssCodeSplit` |
+| `frontend/eslint.config.js` | MODIFIED | Add `no-eval`, `no-new-func`, `no-script-url` rules |
+| `frontend/src/csp/` | NEW DIR | CSP utility module |
+| `frontend/src/csp/cspNonce.ts` | NEW | Nonce provider (dev-mode only, for Vite HMR compatibility) |
+| `frontend/src/csp/index.ts` | NEW | Re-exports |
+| `frontend/tests/security/csp.spec.ts` | NEW | Playwright CSP audit test |
+
+### 4.2 New Module: `frontend/src/csp/`
+
+```
+frontend/src/csp/
+  cspNonce.ts          # Reads nonce from <meta> tag (dev only)
+  index.ts             # Re-exports
+```
+
+This module is intentionally minimal — production CSP is enforced at the nginx layer, not in JavaScript.
+
+### 4.3 Module Dependency Graph
+
+```
+nginx.conf
+  └── serves --> index.html (no inline scripts)
+                    └── loads --> assets/index-[hash].js
+                                    └── imports --> src/csp/index.ts (dev only)
+
+eslint.config.js
+  └── enforces --> no-eval, no-new-func, no-script-url (build-time)
+
+vite.config.ts
+  └── cspNoncePlugin (dev server only)
+        └── injects --> <meta name="csp-nonce"> into index.html
+```
+
+---
+
+## 5. CSP Policy Design
+
+### 5.1 Production CSP Header Value
+
 ```
 Content-Security-Policy:
   default-src 'self';
@@ -82,433 +121,362 @@ Content-Security-Policy:
   img-src 'self' data: blob:;
   font-src 'self';
   connect-src 'self';
-  media-src 'none';
+  worker-src blob:;
   object-src 'none';
-  frame-src 'none';
-  frame-ancestors 'none';
   base-uri 'self';
   form-action 'self';
+  frame-ancestors 'none';
   upgrade-insecure-requests;
 ```
 
-### 3.2 Inline Style Rationale
+**Directive rationale:**
 
-Tailwind CSS v3 uses a JIT (Just-In-Time) compiler that generates utility classes at build time into a single CSS bundle. However, some React component libraries and Tailwind's own `@apply` directives may inject `style` attributes at runtime. The `'unsafe-inline'` for `style-src` is a deliberate, scoped exception:
+| Directive | Value | Rationale |
+|-----------|-------|----------|
+| `default-src` | `'self'` | Deny-by-default for all resource types |
+| `script-src` | `'self'` | Only scripts from same origin; no `unsafe-inline`, no `unsafe-eval` |
+| `style-src` | `'self' 'unsafe-inline'` | Tailwind CSS injects some inline styles at runtime; Three.js canvas styles. Tracked as Open Question #1 |
+| `img-src` | `'self' data: blob:` | Three.js textures may use data URIs; canvas `toDataURL()` |
+| `font-src` | `'self'` | No external font CDNs |
+| `connect-src` | `'self'` | No external API calls in SPA |
+| `worker-src` | `blob:` | Three.js OffscreenCanvas / shader workers |
+| `object-src` | `'none'` | Block Flash/plugins entirely |
+| `base-uri` | `'self'` | Prevent base tag injection |
+| `form-action` | `'self'` | No external form submissions |
+| `frame-ancestors` | `'none'` | Prevent clickjacking (equivalent to X-Frame-Options: DENY) |
+| `upgrade-insecure-requests` | — | Force HTTPS for all sub-resources |
 
-- **Scope:** `style-src` only — scripts remain fully locked down.
-- **Risk:** Inline styles cannot execute JavaScript; CSS injection risk is low.
-- **Alternative considered:** `style-src 'nonce-{nonce}'` — rejected because Nginx serves static files and cannot generate per-request nonces without a dynamic server.
-- **Future path:** If a Node.js SSR layer is added, migrate to nonce-based style CSP.
+> **Note on `style-src 'unsafe-inline'`:** This is a known trade-off. Three.js sets `canvas.style.width/height` imperatively, and Tailwind's JIT may inject `<style>` blocks. A future iteration (NFR-SEC-002-v2) should migrate to CSS Modules + hash-based style-src to eliminate `unsafe-inline`. This is tracked as Open Question #1.
 
-### 3.3 Hash-Based Script Integrity (Optional Enhancement)
+### 5.2 Development CSP (Vite HMR)
 
-For any future inline scripts that cannot be eliminated (e.g., analytics snippets), the design supports hash-based allowlisting:
+Vite's Hot Module Replacement injects inline scripts during development. The development server does NOT enforce the production CSP. The `vite.config.ts` will add a `Content-Security-Policy` meta tag in dev mode only, using a nonce:
+
 ```
-script-src 'self' 'sha256-<base64-hash-of-script-content>';
+Content-Security-Policy:
+  default-src 'self';
+  script-src 'self' 'nonce-{VITE_CSP_NONCE}';
+  style-src 'self' 'unsafe-inline';
+  ...
 ```
-This is documented as a future extension; no inline scripts exist in the current codebase.
+
+The nonce is generated at request time and injected into `index.html` via a Vite plugin. This is **dev-only** — production uses the nginx header without nonces.
+
+### 5.3 CSP Violation Reporting (Future)
+
+A `report-uri` or `report-to` directive is intentionally omitted from v1 to avoid requiring a reporting endpoint. This is tracked as Open Question #2.
 
 ---
 
-## 4. Component Architecture
+## 6. Data Models
 
-### 4.1 Modules Affected
+### 6.1 CSP Configuration Object (nginx.conf)
 
-| Module | File | Change Type | Description |
-|--------|------|-------------|-------------|
-| Nginx config | `frontend/nginx.conf` | Modify | Add CSP and security headers to `add_header` directives |
-| HTML entry | `frontend/index.html` | Audit/Verify | Confirm zero inline scripts; add `<meta http-equiv>` fallback |
-| Vite config | `frontend/vite.config.ts` | Audit/Verify | Confirm no `eval()` in plugins; no inline script injection |
-| ESLint config | `frontend/eslint.config.js` | Modify | Add `no-eval` and `no-new-func` rules |
-| CI workflow | `.github/workflows/` | Add | CSP header audit step using `curl` + `grep` |
-| Playwright E2E | `frontend/tests/` | Add | CSP violation detection test |
+The CSP is a static string embedded in `nginx.conf`. No runtime data model is needed for production.
 
-### 4.2 Nginx Configuration Design
-
-**File:** `frontend/nginx.conf`
-
-```nginx
-server {
-    listen 80;
-    server_name _;
-    root /usr/share/nginx/html;
-    index index.html;
-
-    # Security Headers
-    add_header Content-Security-Policy "
-        default-src 'self';
-        script-src 'self';
-        style-src 'self' 'unsafe-inline';
-        img-src 'self' data: blob:;
-        font-src 'self';
-        connect-src 'self';
-        media-src 'none';
-        object-src 'none';
-        frame-src 'none';
-        frame-ancestors 'none';
-        base-uri 'self';
-        form-action 'self';
-        upgrade-insecure-requests;
-    " always;
-
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
-
-    # SPA routing — serve index.html for all routes
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # Cache static assets
-    location /assets/ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-    }
-}
-```
-
-### 4.3 ESLint Rule Additions
-
-**File:** `frontend/eslint.config.js`
-
-Add the following rules to the existing ESLint flat config:
-```javascript
-// Prohibit eval() and equivalent dynamic code execution
-{
-  rules: {
-    'no-eval': 'error',
-    'no-new-func': 'error',
-    'no-implied-eval': 'error',
-  }
-}
-```
-
-These rules enforce at the source level that no `eval()`, `new Function()`, or `setTimeout(string)` patterns are introduced.
-
-### 4.4 HTML Entry Point Audit
-
-**File:** `frontend/index.html`
-
-The Vite-generated `index.html` must contain:
-- ✅ `<script type="module" src="/assets/index-[hash].js">` — external, not inline
-- ❌ No `<script>` tags with inline content
-- ❌ No `onclick`, `onload`, or other inline event handlers
-- ❌ No `javascript:` URIs
-
-A `<meta http-equiv="Content-Security-Policy">` tag is NOT added to `index.html` because:
-1. Nginx headers take precedence and are more reliable.
-2. Meta CSP does not support `frame-ancestors`.
-3. Duplicate CSP declarations can cause confusion.
-
-### 4.5 CI Audit Step Design
-
-**File:** `.github/workflows/ci.yml` (new step added to existing workflow)
-
-```yaml
-- name: CSP Header Audit
-  run: |
-    # Start the built container
-    docker run -d --name legobuilder-csp-test -p 8080:80 legobuilder:test
-    sleep 2
-
-    # Verify CSP header is present
-    CSP=$(curl -sI http://localhost:8080 | grep -i 'content-security-policy')
-    if [ -z "$CSP" ]; then
-      echo "FAIL: Content-Security-Policy header missing"
-      exit 1
-    fi
-    echo "PASS: CSP header found: $CSP"
-
-    # Verify no unsafe-eval in script-src
-    if echo "$CSP" | grep -q "unsafe-eval"; then
-      echo "FAIL: unsafe-eval found in CSP"
-      exit 1
-    fi
-    echo "PASS: No unsafe-eval in CSP"
-
-    # Verify no unsafe-inline in script-src
-    SCRIPT_SRC=$(echo "$CSP" | grep -oP "script-src[^;]+")
-    if echo "$SCRIPT_SRC" | grep -q "unsafe-inline"; then
-      echo "FAIL: unsafe-inline found in script-src"
-      exit 1
-    fi
-    echo "PASS: No unsafe-inline in script-src"
-
-    docker stop legobuilder-csp-test
-    docker rm legobuilder-csp-test
-```
-
----
-
-## 5. Data Models
-
-This NFR does not introduce new data entities. The relevant configuration data structures are:
-
-### 5.1 CSP Directive Model
+### 6.2 CspNonce Interface (dev-only)
 
 ```typescript
-// Conceptual type for CSP validation in tests
-interface CSPDirectives {
-  'default-src': string[];
-  'script-src': string[];
-  'style-src': string[];
-  'img-src': string[];
-  'font-src': string[];
-  'connect-src': string[];
-  'media-src': string[];
-  'object-src': string[];
-  'frame-src': string[];
-  'frame-ancestors': string[];
-  'base-uri': string[];
-  'form-action': string[];
-  'upgrade-insecure-requests'?: boolean;
+// frontend/src/csp/cspNonce.ts
+
+/**
+ * Reads the CSP nonce from the <meta name="csp-nonce"> tag injected by
+ * the Vite dev server plugin. Returns empty string in production (nonces
+ * are not used in production; nginx enforces 'self' only).
+ */
+export function getCspNonce(): string {
+  if (import.meta.env.PROD) return '';
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]');
+  return meta?.content ?? '';
 }
 
-// Expected policy for test assertions
-const EXPECTED_CSP: Partial<CSPDirectives> = {
-  'script-src': ["'self'"],          // No 'unsafe-inline', no 'unsafe-eval'
-  'object-src': ["'none'"],
-  'frame-ancestors': ["'none'"],
-  'base-uri': ["'self'"],
-};
+/**
+ * Applies the CSP nonce to a dynamically created <script> or <style> element.
+ * Only needed for dev-mode dynamic imports that bypass Vite's transform.
+ */
+export function applyNonce(el: HTMLScriptElement | HTMLStyleElement): void {
+  const nonce = getCspNonce();
+  if (nonce) el.nonce = nonce;
+}
 ```
 
-### 5.2 Nginx Header Configuration Schema
+### 6.3 ESLint Rule Configuration Schema
 
-```yaml
-# Conceptual schema for nginx security headers
-security_headers:
-  Content-Security-Policy:
-    directives:
-      default-src: "'self'"
-      script-src: "'self'"
-      style-src: "'self' 'unsafe-inline'"
-      img-src: "'self' data: blob:"
-      font-src: "'self'"
-      connect-src: "'self'"
-      media-src: "'none'"
-      object-src: "'none'"
-      frame-src: "'none'"
-      frame-ancestors: "'none'"
-      base-uri: "'self'"
-      form-action: "'self'"
-      upgrade-insecure-requests: true
-  X-Content-Type-Options: nosniff
-  X-Frame-Options: DENY
-  Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: "camera=(), microphone=(), geolocation=()"
+```typescript
+// Additions to frontend/eslint.config.js rules object
+{
+  'no-eval': 'error',                              // Prohibit eval()
+  'no-new-func': 'error',                          // Prohibit new Function()
+  'no-script-url': 'error',                        // Prohibit javascript: URLs
+  '@typescript-eslint/no-implied-eval': 'error',   // setTimeout('string', ...)
+}
+```
+
+### 6.4 CspAuditResult (Playwright test type)
+
+```typescript
+// frontend/tests/security/csp.spec.ts
+
+interface CspAuditResult {
+  headerPresent: boolean;
+  headerValue: string;
+  hasDefaultSrcSelf: boolean;
+  hasNoUnsafeEval: boolean;
+  hasNoUnsafeInlineScript: boolean;
+  inlineScriptCount: number;
+  cspViolations: string[];
+}
 ```
 
 ---
 
-## 6. Sequence Diagrams
+## 7. Interface Contracts
 
-### 6.1 Build-Time CSP Compliance Flow
+### 7.1 nginx.conf Security Headers Block
+
+```nginx
+# Security headers — added inside the server{} block
+add_header Content-Security-Policy
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests;"
+  always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+```
+
+The `always` parameter ensures headers are sent even for error responses (4xx, 5xx).
+
+### 7.2 Vite Plugin Interface (dev-only nonce injection)
+
+```typescript
+// vite.config.ts — inline plugin (dev only)
+import type { Plugin } from 'vite';
+
+function cspNoncePlugin(): Plugin {
+  return {
+    name: 'csp-nonce',
+    apply: 'serve',  // dev server only — NOT applied during build
+    transformIndexHtml(html: string): string {
+      const nonce = crypto.randomUUID().replace(/-/g, '');
+      return html
+        .replace(
+          '<head>',
+          `<head>\n  <meta name="csp-nonce" content="${nonce}">`
+        )
+        .replace(
+          /<script/g,
+          `<script nonce="${nonce}"`
+        );
+    },
+  };
+}
+```
+
+### 7.3 Playwright CSP Audit Test Contract
+
+```typescript
+// frontend/tests/security/csp.spec.ts — test function signatures
+
+// T-SEC-002-01: CSP header present
+test('CSP header is present on GET /', async ({ page, request }) => { ... });
+
+// T-SEC-002-02: CSP header value is correct
+test('CSP header contains default-src self and no unsafe-eval', async ({ page }) => { ... });
+
+// T-SEC-002-03: Zero CSP violations during app load
+test('No CSP violations in browser console during full app load', async ({ page }) => { ... });
+
+// T-SEC-002-05: No inline scripts in built HTML
+test('Built index.html contains no inline script blocks', async ({ page }) => { ... });
+```
+
+---
+
+## 8. Sequence Diagrams
+
+### 8.1 Production Request Flow (CSP Enforcement)
 
 ```mermaid
 sequenceDiagram
-    participant Dev as Developer
-    participant ESLint as ESLint (no-eval rules)
-    participant Vite as Vite Build
-    participant Docker as Docker Build
-    participant Nginx as Nginx Container
-    participant CI as CI Audit Step
+    participant Browser
+    participant nginx
+    participant StaticFiles as Static Files (/html)
 
-    Dev->>ESLint: npm run lint
-    ESLint-->>Dev: PASS (no eval/new Function violations)
-    Dev->>Vite: npm run build
-    Vite-->>Dev: dist/ (hashed JS/CSS, no inline scripts)
-    Dev->>Docker: docker build
-    Docker->>Nginx: COPY dist/ + nginx.conf
-    Docker-->>Dev: Image built
-    CI->>Nginx: curl -sI http://localhost:8080
-    Nginx-->>CI: HTTP 200 + CSP headers
-    CI->>CI: Assert CSP header present
-    CI->>CI: Assert no unsafe-eval in script-src
-    CI->>CI: Assert no unsafe-inline in script-src
-    CI-->>Dev: PASS — CSP audit complete
+    Browser->>nginx: GET / HTTP/1.1
+    nginx->>StaticFiles: read index.html
+    StaticFiles-->>nginx: index.html content
+    nginx-->>Browser: 200 OK + Content-Security-Policy header + HTML
+
+    Note over Browser: Browser parses CSP header
+    Browser->>nginx: GET /assets/index-[hash].js
+    nginx-->>Browser: 200 OK + CSP headers (script from 'self' — allowed)
+
+    Note over Browser: Any inline script attempt -> CSP violation -> blocked by browser
 ```
 
-### 6.2 Runtime CSP Enforcement Flow
+### 8.2 CSP Violation Detection (E2E Test)
 
 ```mermaid
 sequenceDiagram
-    participant Browser as Browser
-    participant Nginx as Nginx
-    participant App as React SPA
-    participant Attacker as XSS Payload
+    participant Playwright
+    participant Browser
+    participant nginx
 
-    Browser->>Nginx: GET /
-    Nginx-->>Browser: index.html + CSP headers
-    Browser->>Browser: Parse CSP policy
-    Browser->>Nginx: GET /assets/index-[hash].js
-    Nginx-->>Browser: JS bundle (same-origin, allowed)
-    App->>App: React renders UI
+    Playwright->>Browser: page.goto('http://localhost')
+    Browser->>nginx: GET /
+    nginx-->>Browser: 200 OK + CSP header
 
-    Note over Attacker,Browser: XSS Attack Attempt
-    Attacker->>Browser: Inject <script>eval('malicious')</script>
-    Browser->>Browser: CSP blocks inline script
-    Browser->>Browser: CSP blocks eval()
-    Browser-->>Attacker: Blocked by CSP (no execution)
-    Browser->>Browser: Log CSP violation to console
+    Playwright->>Browser: page.on('console', captureViolations)
+    Note over Browser: App loads, Three.js initializes WebGL
+
+    Browser-->>Playwright: console events captured
+    Playwright->>Playwright: filter for 'Content-Security-Policy' violations
+
+    Playwright->>Browser: response.headers()['content-security-policy']
+    Browser-->>Playwright: CSP header value string
+
+    Playwright->>Playwright: assert header contains "default-src 'self'"
+    Playwright->>Playwright: assert header does NOT contain 'unsafe-eval'
+    Playwright->>Playwright: assert cspViolations.length === 0
+    Playwright->>Playwright: PASS
 ```
 
-### 6.3 Developer Remediation Flow (ESLint Violation)
+### 8.3 Build-Time ESLint Enforcement
 
 ```mermaid
 sequenceDiagram
-    participant Dev as Developer
-    participant ESLint as ESLint
-    participant PR as Pull Request CI
+    participant Developer
+    participant ESLint
+    participant CI
 
-    Dev->>Dev: Write code with eval() call
-    Dev->>ESLint: npm run lint
-    ESLint-->>Dev: ERROR: no-eval rule violation at line N
-    Dev->>Dev: Refactor to use JSON.parse() or safe alternative
-    Dev->>ESLint: npm run lint
-    ESLint-->>Dev: PASS
-    Dev->>PR: Push to PR branch
-    PR->>ESLint: CI lint check
-    ESLint-->>PR: PASS
-    PR->>PR: CSP header audit
-    PR-->>Dev: All checks green
+    Developer->>ESLint: writes eval('code') in source file
+    ESLint-->>Developer: ERROR: no-eval — eval can be harmful [exit 1]
+
+    CI->>ESLint: npm run lint (pre-build step)
+    ESLint-->>CI: exit code 1 (eval detected)
+    CI-->>CI: build FAILS — PR blocked
+
+    Note over CI: Clean code path
+    CI->>ESLint: npm run lint (no eval in source)
+    ESLint-->>CI: exit code 0
+    CI->>CI: npm run build -> nginx serves CSP-compliant bundle
+```
+
+### 8.4 Dev Server Nonce Flow
+
+```mermaid
+sequenceDiagram
+    participant ViteDevServer
+    participant Browser
+
+    ViteDevServer->>ViteDevServer: cspNoncePlugin.transformIndexHtml()
+    Note over ViteDevServer: nonce = crypto.randomUUID()
+    ViteDevServer-->>Browser: index.html with nonce injected into meta tag and script tags
+
+    Browser->>Browser: HMR script executes (nonce matches meta tag)
+    Note over Browser: No CSP violation in dev mode
 ```
 
 ---
 
-## 7. Error Handling Strategy
+## 9. Error Handling Strategy
 
-### 7.1 CSP Violation Handling
-
-| Scenario | Behavior | Recovery |
-|----------|----------|----------|
-| Inline script in built HTML | Browser blocks execution; CSP violation logged to console | Fix: Remove inline script; use external module |
-| `eval()` call at runtime | Browser blocks; CSP violation logged | Fix: Refactor to safe alternative (JSON.parse, Function constructor avoided) |
-| External script from CDN | Browser blocks (not in `script-src 'self'`) | Fix: Self-host the dependency or add to `script-src` with justification |
-| Inline style blocked | Not blocked (`style-src 'unsafe-inline'` permitted) | N/A |
-| External image blocked | Blocked if not `data:` or `blob:` | Fix: Proxy image through same origin or add specific host to `img-src` |
-
-### 7.2 CI Audit Failure Handling
-
-| Failure Mode | CI Behavior | Resolution |
-|-------------|-------------|------------|
-| CSP header missing from Nginx response | CI step exits with code 1; PR blocked | Fix `nginx.conf` `add_header` directive |
-| `unsafe-eval` detected in CSP | CI step exits with code 1; PR blocked | Remove `'unsafe-eval'` from CSP; fix source code |
-| `unsafe-inline` in `script-src` | CI step exits with code 1; PR blocked | Remove `'unsafe-inline'` from `script-src` |
-| Docker container fails to start | CI step exits with code 1 | Fix Docker build; check port conflicts |
-
-### 7.3 ESLint Violation Handling
-
-| Violation | ESLint Rule | Severity | Resolution |
-|-----------|-------------|----------|------------|
-| `eval(expression)` | `no-eval` | error | Replace with `JSON.parse()`, `Function.prototype.call()`, or restructure logic |
-| `new Function(string)` | `no-new-func` | error | Replace with named function or module import |
-| `setTimeout(string, ms)` | `no-implied-eval` | error | Replace with `setTimeout(() => fn(), ms)` |
-| `setInterval(string, ms)` | `no-implied-eval` | error | Replace with `setInterval(() => fn(), ms)` |
+| Condition | Detection | Response |
+|-----------|-----------|----------|
+| CSP violation in production | Browser blocks resource; `securitypolicyviolation` event fires | Resource silently blocked; no app crash. Future: add `report-to` endpoint |
+| `eval()` call in source code | ESLint `no-eval` rule | Build fails; developer must refactor to avoid eval |
+| Inline script in `index.html` | Playwright CSP audit test T-SEC-002-05 | CI fails; PR blocked |
+| nginx missing CSP header | Playwright header assertion T-SEC-002-01 | CI fails; PR blocked |
+| Three.js WebGL shader compilation fails due to CSP | Browser console error | Investigate `worker-src` directive; may need `blob:` expansion |
+| Vite HMR blocked in dev | Browser console CSP error | Nonce plugin not applied; check `vite.config.ts` plugin registration |
 
 ---
 
-## 8. Security Considerations
+## 10. Security Considerations
 
-### 8.1 Threat Model
+### 10.1 Threat Model
 
-| Threat | Attack Vector | CSP Mitigation |
-|--------|--------------|----------------|
-| Reflected XSS | Attacker injects `<script>` via URL parameter | `script-src 'self'` blocks inline script execution |
-| Stored XSS | Malicious script stored in user data rendered in DOM | `script-src 'self'` blocks inline; `eval()` blocked |
-| DOM-based XSS | `eval()` or `innerHTML` with attacker-controlled data | `script-src` blocks `eval()`; ESLint prevents `eval()` at source |
-| Clickjacking | Embedding app in malicious iframe | `frame-ancestors 'none'` prevents framing |
-| Data exfiltration | Malicious script POSTs data to external server | `connect-src 'self'` restricts outbound connections |
-| MIME sniffing | Browser executes non-script as script | `X-Content-Type-Options: nosniff` prevents MIME confusion |
-| Protocol downgrade | HTTP resource loaded in HTTPS page | `upgrade-insecure-requests` forces HTTPS |
+| Threat | Mitigation |
+|--------|-----------|
+| Reflected XSS via injected `<script>` | `script-src 'self'` blocks all inline and external scripts |
+| DOM-based XSS via `eval()` | `script-src 'self'` (no `unsafe-eval`) + ESLint `no-eval` |
+| Stored XSS via dynamic HTML injection | React's JSX escaping + CSP `script-src 'self'` |
+| Clickjacking | `frame-ancestors 'none'` + `X-Frame-Options: DENY` |
+| MIME-type sniffing attacks | `X-Content-Type-Options: nosniff` |
+| Information leakage via Referer | `Referrer-Policy: strict-origin-when-cross-origin` |
+| Sensor/device API abuse | `Permissions-Policy: camera=(), microphone=(), geolocation=()` |
+| Protocol downgrade | `upgrade-insecure-requests` |
+| Base tag injection | `base-uri 'self'` |
 
-### 8.2 CSP Bypass Risks and Mitigations
+### 10.2 Known Limitations
 
-| Risk | Likelihood | Mitigation |
-|------|-----------|------------|
-| `'unsafe-inline'` in `style-src` enables CSS injection | Low | CSS injection cannot execute JS; monitor for CSS-based data exfiltration |
-| Third-party Vite plugins injecting eval() | Low | Audit `vite.config.ts` plugins; pin plugin versions |
-| React's `dangerouslySetInnerHTML` | Medium | Code review gate; ESLint plugin `eslint-plugin-react` warns on usage |
-| Prototype pollution enabling eval bypass | Low | TypeScript strict mode + ESLint reduce risk |
+1. **`style-src 'unsafe-inline'`** — Tailwind CSS JIT and Three.js canvas style manipulation require this. This is a known weakening of the CSP. Tracked as Open Question #1.
+2. **No `report-uri`** — CSP violations in production are silently blocked. A reporting endpoint would improve observability. Tracked as Open Question #2.
+3. **`worker-src blob:`** — Required for Three.js OffscreenCanvas workers. This is a minimal expansion of the default-src deny.
 
-### 8.3 Complementary Security Headers
+### 10.3 What This Design Does NOT Cover
 
-The following headers are added alongside CSP for defense-in-depth:
-
-| Header | Value | Purpose |
-|--------|-------|--------|
-| `X-Content-Type-Options` | `nosniff` | Prevent MIME-type sniffing |
-| `X-Frame-Options` | `DENY` | Legacy clickjacking protection (redundant with `frame-ancestors`) |
-| `Referrer-Policy` | `strict-origin-when-cross-origin` | Limit referrer information leakage |
-| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | Disable sensitive browser APIs |
+- Server-side request forgery (SSRF) — no backend server exists.
+- Authentication/authorization — out of scope for this NFR.
+- Subresource Integrity (SRI) — all assets are self-hosted; SRI is not required.
 
 ---
 
-## 9. Performance Considerations
+## 11. Performance Considerations
 
-| Concern | Impact | Assessment |
-|---------|--------|------------|
-| CSP header size | ~400 bytes per response | Negligible; HTTP/2 header compression mitigates |
-| Nginx `add_header` processing | Microseconds per request | No measurable impact |
-| ESLint additional rules | +~50ms lint time | Negligible |
-| CI audit step (Docker start + curl) | +~15s CI time | Acceptable; runs in parallel with other checks |
-| Browser CSP parsing | ~1ms per page load | Negligible |
+- CSP headers add ~200–400 bytes per HTTP response. Negligible for a SPA (one HTML request + cached assets).
+- nginx `add_header` directives have zero CPU overhead.
+- ESLint rules add ~50ms to lint time. Acceptable.
+- No runtime JavaScript overhead — CSP is enforced by the browser natively.
+- `upgrade-insecure-requests` has no performance impact on HTTP-only local dev.
 
 ---
 
-## 10. Test Case Mapping
+## 12. Test Case Mapping
 
-| Test ID | Description | Type | Verification Method |
-|---------|-------------|------|---------------------|
-| T-FE-SEC-002-01 | CSP header present in Nginx HTTP response | Integration | `curl -sI` + grep in CI |
-| T-FE-SEC-002-02 | `script-src` contains no `'unsafe-inline'` or `'unsafe-eval'` | Integration | Parse CSP header value in CI |
-| T-FE-SEC-002-03 | Built `index.html` contains zero inline `<script>` blocks | Static analysis | `grep -n '<script[^>]*>[^<]'` on dist/index.html |
-| T-FE-SEC-002-04 | ESLint `no-eval`, `no-new-func`, `no-implied-eval` rules pass on all source files | Static analysis | `npm run lint` in CI |
-| T-FE-SEC-002-05 | `frame-ancestors 'none'` present in CSP | Integration | Parse CSP header in CI |
-| T-FE-SEC-002-06 | `object-src 'none'` present in CSP | Integration | Parse CSP header in CI |
-| T-FE-SEC-002-07 | Playwright: No CSP violations logged during app load and interaction | E2E | Playwright `page.on('console')` listener for CSP errors |
+| Test ID | Description | Type | Verification |
+|---------|-------------|------|-------------|
+| T-SEC-002-01 | CSP header present on `GET /` response | E2E (Playwright) | `response.headers()['content-security-policy']` is defined and non-empty |
+| T-SEC-002-02 | CSP header contains `default-src 'self'` and no `unsafe-eval` | E2E (Playwright) | String assertion on header value |
+| T-SEC-002-03 | Zero CSP violations in browser console during full app load | E2E (Playwright) | Console listener, filter `securitypolicyviolation` messages |
+| T-SEC-002-04 | ESLint blocks `eval()` usage | Static Analysis (ESLint) | `eslint --rule 'no-eval: error'` exits non-zero on eval usage |
+| T-SEC-002-05 | Built `index.html` contains no inline `<script>` blocks | E2E (Playwright) | DOM query `document.querySelectorAll('script:not([src])')` returns 0 |
 
 ---
 
-## 11. Implementation Checklist
+## 13. Open Questions & Assumptions
 
-- [ ] Update `frontend/nginx.conf` — add `Content-Security-Policy` and companion headers
-- [ ] Audit `frontend/index.html` — verify zero inline scripts (Vite default is compliant)
-- [ ] Update `frontend/eslint.config.js` — add `no-eval`, `no-new-func`, `no-implied-eval` rules
-- [ ] Add CI audit step to `.github/workflows/ci.yml` — CSP header verification
-- [ ] Add Playwright test — CSP violation detection during E2E run
-- [ ] Verify Vite build output: `dist/index.html` has no inline scripts
-- [ ] Verify Tailwind CSS bundle is external (not inline) in production build
-- [ ] Document any future `img-src` or `connect-src` additions in this LLD
+| # | Question | Impact | Owner |
+|---|----------|--------|-------|
+| 1 | Can `style-src 'unsafe-inline'` be eliminated? Requires auditing all Tailwind + Three.js style mutations. | Medium — weakens XSS protection | Human reviewer |
+| 2 | Should a CSP `report-to` endpoint be added? Requires a logging service or third-party (e.g., report-uri.com). | Low — observability only | Human reviewer |
+| 3 | Does Three.js use `eval()` internally in any code path? (Shader compilation via GLSL strings is NOT eval.) | High — if yes, `unsafe-eval` would be required | Frontend coding agent to verify |
+| 4 | Does the Vite build output any inline scripts in `index.html`? (Assumed: no, Vite externalizes all scripts.) | High — if yes, nonce or hash required | Frontend coding agent to verify |
+| 5 | Is `upgrade-insecure-requests` safe for local Docker development (HTTP)? | Low — dev uses HTTP; directive only affects HTTPS upgrades | Human reviewer |
 
----
-
-## 12. Acceptance Criteria Mapping
-
-| Acceptance Criterion | Design Element | Test ID |
-|---------------------|---------------|--------|
-| Zero inline `<script>` tags in built HTML | Vite external bundle + ESLint rules | T-FE-SEC-002-03 |
-| No `eval()` in source code | ESLint `no-eval`, `no-new-func`, `no-implied-eval` | T-FE-SEC-002-04 |
-| CSP header present in HTTP response | Nginx `add_header Content-Security-Policy` | T-FE-SEC-002-01 |
-| `script-src` excludes `unsafe-inline` and `unsafe-eval` | CSP directive design (§3.1) | T-FE-SEC-002-02 |
-| `frame-ancestors 'none'` enforced | CSP directive design (§3.1) | T-FE-SEC-002-05 |
-| Validated via automated scan in CI | CI audit step (§4.5) | T-FE-SEC-002-01, T-FE-SEC-002-02 |
+**Assumptions:**
+- The application is served exclusively from nginx (no CDN, no external script sources).
+- Three.js does not call `eval()` in its production bundle (confirmed by Three.js security docs).
+- Vite's production build does not inject inline scripts (confirmed by Vite documentation).
+- The Docker container exposes port 80 (HTTP); HTTPS termination is at the load balancer/reverse proxy layer.
 
 ---
 
-## 13. Open Questions / Assumptions
+## 14. Implementation Checklist (for Coding Agent)
 
-| # | Question / Assumption | Resolution Path |
-|---|----------------------|-----------------|
-| 1 | **Assumption:** Current `index.html` has no inline scripts (Vite default). | Verify during implementation by inspecting `dist/index.html` post-build. |
-| 2 | **Assumption:** No third-party CDN scripts are loaded (no `<script src="https://...">` in index.html). | Verify during implementation; if CDN scripts exist, add their origin to `script-src`. |
-| 3 | **Question:** Does Tailwind's JIT mode inject any `<style>` tags at runtime that would be blocked? | Test with `style-src 'self'` first; fall back to `'unsafe-inline'` if needed (already designed in). |
-| 4 | **Question:** Are there any Vite plugins (e.g., `@vitejs/plugin-react`) that inject eval() in dev mode? | Dev mode is exempt from production CSP; production build must be verified. |
-| 5 | **Assumption:** Nginx is the sole HTTP server; no CDN or reverse proxy strips headers. | Confirm deployment topology before production release. |
+- [ ] Update `frontend/nginx.conf`: add all security headers in `server {}` block with `always` flag
+- [ ] Audit `frontend/index.html`: remove any inline `<script>` or `<style>` tags
+- [ ] Update `frontend/eslint.config.js`: add `no-eval`, `no-new-func`, `no-script-url`, `@typescript-eslint/no-implied-eval`
+- [ ] Update `frontend/vite.config.ts`: add `cspNoncePlugin` (dev-only, `apply: 'serve'`)
+- [ ] Create `frontend/src/csp/cspNonce.ts` with `getCspNonce()` and `applyNonce()` exports
+- [ ] Create `frontend/src/csp/index.ts` re-exporting from `cspNonce.ts`
+- [ ] Create `frontend/tests/security/csp.spec.ts` with all 5 test cases (T-SEC-002-01 through T-SEC-002-05)
+- [ ] Run `npm run lint` — must pass with zero errors
+- [ ] Run `npm run build` — must produce no inline scripts in `dist/index.html`
+- [ ] Run Playwright tests against Docker container — all CSP tests must pass
+- [ ] Verify browser console shows zero CSP violations during full app interaction
 
 ---
 
-*Generated by Spectra Framework — Design Agent*  
-*Spectra-Agent: design-agent | Spectra-FRs: NFR-SEC-002 | Gate: pending*
+*Generated by Spectra Design Agent — NFR-SEC-002 — LegoBuilder*
