@@ -1,24 +1,22 @@
 /**
  * Persistence Store (Zustand) — NFR-REL-001 Auto-Save Crash Durability
  *
- * Implements the state machine defined in LLD Section 5.
+ * Implements PersistenceStoreState from LLD Section 5.
+ * State machine for auto-save status and recovery status.
  *
- * Auto-save status transitions:
- *   idle → saving → saved → idle (normal cycle)
- *   idle → saving → error → saving → saved (retry after error)
- *
- * Recovery status transitions:
- *   none → pending → accepted (user resumes)
- *   none → pending → dismissed (user starts fresh)
+ * Auto-save transitions: idle → saving → saved | error
+ * Recovery transitions: none → pending → accepted | dismissed
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
  */
 
 import { create } from 'zustand';
-
-type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-type RecoveryStatus = 'none' | 'pending' | 'accepted' | 'dismissed';
+import type {
+  AutoSaveStatus,
+  RecoveryStatus,
+  SceneSnapshot,
+} from '../../tests/unit/persistenceService.types';
 
 export interface PersistenceState {
   // Auto-save state
@@ -28,7 +26,7 @@ export interface PersistenceState {
 
   // Recovery state
   recoveryStatus: RecoveryStatus;
-  recoverySnapshot: object | null;
+  recoverySnapshot: SceneSnapshot | null;
   sessionId: string | null;
 
   // Actions
@@ -47,7 +45,7 @@ const initialState = {
   lastSavedAt: null as number | null,
   saveError: null as string | null,
   recoveryStatus: 'none' as RecoveryStatus,
-  recoverySnapshot: null as object | null,
+  recoverySnapshot: null as SceneSnapshot | null,
   sessionId: null as string | null,
 };
 
@@ -58,13 +56,20 @@ export const usePersistenceStore = create<PersistenceState>((set) => ({
     set({ autoSaveStatus: 'saving', saveError: null }),
 
   setSaved: (timestamp: number) =>
-    set({ autoSaveStatus: 'saved', lastSavedAt: timestamp, saveError: null }),
+    set({
+      autoSaveStatus: 'saved',
+      lastSavedAt: timestamp,
+      saveError: null,
+    }),
 
   setSaveError: (message: string) =>
     set({ autoSaveStatus: 'error', saveError: message }),
 
   setRecoveryPending: (snapshot: object) =>
-    set({ recoveryStatus: 'pending', recoverySnapshot: snapshot }),
+    set({
+      recoveryStatus: 'pending',
+      recoverySnapshot: snapshot as SceneSnapshot,
+    }),
 
   acceptRecovery: () =>
     set({ recoveryStatus: 'accepted', recoverySnapshot: null }),
@@ -76,5 +81,3 @@ export const usePersistenceStore = create<PersistenceState>((set) => ({
 
   reset: () => set(initialState),
 }));
-
-export default usePersistenceStore;

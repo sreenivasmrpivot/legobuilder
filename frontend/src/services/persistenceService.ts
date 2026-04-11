@@ -1,19 +1,24 @@
 /**
  * Persistence Service — NFR-REL-001 Auto-Save Crash Durability
  *
- * Implements IPersistenceService interface from LLD Section 6.
- * Uses IndexedDB for client-side persistence with atomic transactions.
+ * Implements IPersistenceService from LLD Section 6.
+ * Manages IndexedDB operations for auto-save snapshots and session metadata.
  *
- * Database: 'legobuilder-autosave' v1
- * Object Stores:
- *   - 'scene-snapshots': keyPath='snapshotId', indexes: 'by-session', 'by-timestamp'
- *   - 'auto-save-meta': keyPath='sessionId'
+ * Schema (LLD Section 4):
+ * - Database: 'legobuilder-autosave' v1
+ * - Store 'scene-snapshots': keyPath='snapshotId', indexes: by-session, by-timestamp
+ * - Store 'auto-save-meta': keyPath='sessionId'
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
  */
 
-import type { SceneData, SceneSnapshot, AutoSaveMeta, IPersistenceService } from '../types/persistence';
+import type {
+  SceneData,
+  SceneSnapshot,
+  AutoSaveMeta,
+  IPersistenceService,
+} from '../../tests/unit/persistenceService.types';
 
 const DB_NAME = 'legobuilder-autosave';
 const DB_VERSION = 1;
@@ -22,16 +27,16 @@ const STORE_META = 'auto-save-meta';
 const MAX_SNAPSHOTS = 10;
 
 class PersistenceService implements IPersistenceService {
-  private dbPromise: Promise<IDBDatabase> | null = null;
+  private db: IDBDatabase | null = null;
 
   /**
-   * Open (or upgrade) the IndexedDB database.
-   * Creates object stores and indexes on first run.
+   * Open (or upgrade) the IndexedDB database with the LLD schema.
+   * Gracefully handles private-mode / unavailable IndexedDB.
    */
-  openDb(): Promise<IDBDatabase> {
-    if (this.dbPromise) return this.dbPromise;
+  async openDb(): Promise<IDBDatabase> {
+    if (this.db) return this.db;
 
-    this.dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+    return new Promise<IDBDatabase>((resolve, reject) => {
       try {
         const req = indexedDB.open(DB_NAME, DB_VERSION);
 
@@ -49,23 +54,24 @@ class PersistenceService implements IPersistenceService {
           }
         };
 
-        req.onsuccess = () => resolve(req.result);
+        req.onsuccess = () => {
+          this.db = req.result;
+          resolve(req.result);
+        };
+
         req.onerror = () => {
-          this.dbPromise = null;
           reject(new Error('IndexedDB unavailable'));
         };
       } catch (e) {
-        this.dbPromise = null;
         reject(new Error('IndexedDB unavailable'));
       }
     });
-
-    return this.dbPromise;
   }
 
   /**
-   * Write snapshot + meta in a single atomic readwrite transaction.
-   * Both stores are committed together or neither is.
+   * Write snapshot + meta atomically in a single readwrite transaction.
+   * If the write fails (e.g., QuotaExceededError), the error is propagated
+   * but does not crash the application.
    */
   async saveSnapshot(sessionId: string, data: SceneData): Promise<void> {
     const db = await this.openDb();
@@ -78,36 +84,37 @@ class PersistenceService implements IPersistenceService {
       const snapshotId = `${sessionId}-${Date.now()}`;
       const savedAt = Date.now();
 
-      const snapshot: SceneSnapshot = {
+      tx.objectStore(STORE_SNAPSHOTS).put({
         snapshotId,
         sessionId,
         savedAt,
         version: 1,
         data,
+      } satisfies SceneSnapshot);
+
+      // Count existing snapshots for this session
+      const countReq = tx
+        .objectStore(STORE_SNAPSHOTS)
+        .index('by-session')
+        .count(IDBKeyRange.only(sessionId));
+
+      countReq.onsuccess = () => {
+        const count = countReq.result + 1; // +1 for the one we just put
+        tx.objectStore(STORE_META).put({
+          sessionId,
+          status: 'active',
+          lastSavedAt: savedAt,
+          snapshotCount: count,
+        } satisfies AutoSaveMeta);
       };
 
-      tx.objectStore(STORE_SNAPSHOTS).put(snapshot);
-
-      const meta: AutoSaveMeta = {
-        sessionId,
-        status: 'active',
-        lastSavedAt: savedAt,
-        snapshotCount: 1,
-      };
-
-      tx.objectStore(STORE_META).put(meta);
-
-      tx.oncomplete = () => {
-        // Fire-and-forget pruning after successful write
-        this.pruneSnapshots(sessionId).catch(() => {});
-        resolve();
-      };
+      tx.oncomplete = () => resolve();
     });
   }
 
   /**
    * Mark session as closed (called from beforeunload handler).
-   * Updates the meta record status from 'active' to 'closed'.
+   * This prevents the crash recovery prompt on next load.
    */
   async markSessionClosed(sessionId: string): Promise<void> {
     const db = await this.openDb();
@@ -122,10 +129,9 @@ class PersistenceService implements IPersistenceService {
           meta.status = 'closed';
           tx.objectStore(STORE_META).put(meta);
         }
-        tx.oncomplete = () => resolve();
       };
 
-      req.onerror = () => reject(req.error);
+      tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
   }
@@ -157,7 +163,7 @@ class PersistenceService implements IPersistenceService {
 
   /**
    * Prune old snapshots, keeping only the most recent maxCount.
-   * Default maxCount is MAX_SNAPSHOTS (10).
+   * Default maxCount is MAX_SNAPSHOTS (10) per LLD.
    */
   async pruneSnapshots(
     sessionId: string,
@@ -178,41 +184,14 @@ class PersistenceService implements IPersistenceService {
         toDelete.forEach((r) => {
           tx.objectStore(STORE_SNAPSHOTS).delete(r.snapshotId);
         });
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
       };
 
-      req.onerror = () => reject(req.error);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
     });
-  }
-
-  /**
-   * Get the meta record for a session.
-   */
-  async getMeta(sessionId: string): Promise<AutoSaveMeta | undefined> {
-    const db = await this.openDb();
-
-    return new Promise<AutoSaveMeta | undefined>((resolve, reject) => {
-      const tx = db.transaction([STORE_META], 'readonly');
-      const req = tx.objectStore(STORE_META).get(sessionId);
-      req.onsuccess = () =>
-        resolve(req.result as AutoSaveMeta | undefined);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  /**
-   * Detect if a previous session was left in 'active' status (crash).
-   */
-  async detectCrashedSession(sessionId: string): Promise<boolean> {
-    try {
-      const meta = await this.getMeta(sessionId);
-      return meta?.status === 'active';
-    } catch {
-      return false;
-    }
   }
 }
 
+/** Singleton instance */
 export const persistenceService = new PersistenceService();
-export default persistenceService;
+export type { IPersistenceService };

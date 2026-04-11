@@ -1,11 +1,9 @@
 /**
  * useAutoSave Hook — NFR-REL-001 Auto-Save Crash Durability
  *
- * Implements the auto-save interval and beforeunload handler
- * defined in LLD Section 6.
- *
+ * Implements the auto-save hook from LLD Section 6.
  * - Saves scene snapshot to IndexedDB every 30 seconds (configurable)
- * - Registers beforeunload handler to mark session as 'closed'
+ * - Registers beforeunload handler to mark session as 'closed' on graceful close
  * - Cleans up interval and event listener on unmount
  *
  * Spectra-Agent: frontend-coding
@@ -18,13 +16,9 @@ import { persistenceService } from '../services/persistenceService';
 const AUTO_SAVE_INTERVAL_MS = 30_000; // 30 seconds per LLD Section 9
 
 export interface UseAutoSaveOptions {
-  /** Unique session identifier */
   sessionId: string;
-  /** Function that returns the current scene state to persist */
   getSceneSnapshot: () => object;
-  /** Optional error callback for save failures */
   onSaveError?: (error: Error) => void;
-  /** Override the default 30s interval (mainly for testing) */
   intervalMs?: number;
 }
 
@@ -42,7 +36,7 @@ export function useAutoSave(options: UseAutoSaveOptions) {
   const triggerSave = useCallback(async () => {
     try {
       const snapshot = getSceneSnapshot();
-      await persistenceService.saveSnapshot(sessionId, snapshot);
+      await persistenceService.saveSnapshot(sessionId, snapshot as any);
       saveCountRef.current += 1;
       lastSaveRef.current = Date.now();
     } catch (e) {
@@ -56,7 +50,7 @@ export function useAutoSave(options: UseAutoSaveOptions) {
     return () => clearInterval(id);
   }, [triggerSave, intervalMs]);
 
-  // Register beforeunload handler to mark session as closed on graceful exit
+  // Register beforeunload handler for graceful close
   useEffect(() => {
     const handleBeforeUnload = () => {
       persistenceService.markSessionClosed(sessionId);
@@ -72,4 +66,4 @@ export function useAutoSave(options: UseAutoSaveOptions) {
   };
 }
 
-export default useAutoSave;
+export { AUTO_SAVE_INTERVAL_MS };
