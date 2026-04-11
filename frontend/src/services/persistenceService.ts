@@ -1,8 +1,9 @@
 /**
- * Persistence Service — IndexedDB read/write operations
+ * Persistence Service — NFR-REL-001
  *
- * Provides atomic dual-store writes (scene-snapshots + auto-save-meta),
- * session lifecycle management, and quota exceeded recovery.
+ * Provides atomic IndexedDB read/write operations for auto-save.
+ * All writes to scene-snapshots and auto-save-meta happen in a single
+ * IDB transaction to guarantee atomicity (LLD Section 4.2 / Section 7).
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
@@ -10,10 +11,9 @@
  */
 
 import {
-  getDB,
-  SCENE_SNAPSHOTS_STORE,
-  AUTO_SAVE_META_STORE,
-  MAX_RETAINED_SNAPSHOTS,
+  openDB,
+  STORE_SCENE_SNAPSHOTS,
+  STORE_AUTO_SAVE_META,
   PersistenceError,
   PersistenceErrorCode,
   type SceneSnapshot,
@@ -24,39 +24,41 @@ import {
 } from './dbSchema';
 
 // ---------------------------------------------------------------------------
-// App version (injected at build time or hardcoded for now)
+// Constants
 // ---------------------------------------------------------------------------
 
 const APP_VERSION = '1.0.0';
+const MAX_SNAPSHOTS_PER_SESSION = 10;
 
 // ---------------------------------------------------------------------------
-// Session ID management
+// Session management
 // ---------------------------------------------------------------------------
 
 let currentSessionId: string | null = null;
-let currentSaveCount = 0;
+let saveCount = 0;
 
 /**
- * Get or create the current session ID.
+ * Generate or return the current session ID.
+ * A new session ID is created on first call per page load.
  */
 export function getSessionId(): string {
   if (!currentSessionId) {
     currentSessionId = crypto.randomUUID();
-    currentSaveCount = 0;
+    saveCount = 0;
   }
   return currentSessionId;
 }
 
 /**
- * Reset session state (used after discard or for testing).
+ * Reset the session (used after discard or for testing).
  */
 export function resetSession(): void {
   currentSessionId = null;
-  currentSaveCount = 0;
+  saveCount = 0;
 }
 
 // ---------------------------------------------------------------------------
-// saveSnapshot — atomic dual-store write
+// saveSnapshot() — T-UNIT-REL-001-01
 // ---------------------------------------------------------------------------
 
 export interface SaveSnapshotInput {
@@ -66,17 +68,18 @@ export interface SaveSnapshotInput {
 }
 
 /**
- * Saves a scene snapshot and updates auto-save metadata in a single
- * IndexedDB transaction. If the transaction fails, neither store is modified.
+ * Save a scene snapshot atomically to both scene-snapshots and auto-save-meta
+ * stores in a single IndexedDB transaction.
  *
  * On QuotaExceededError, purges oldest snapshots and retries once.
  */
 export async function saveSnapshot(input: SaveSnapshotInput): Promise<string> {
-  const db = await getDB();
+  const db = await openDB();
   const sessionId = getSessionId();
   const snapshotId = crypto.randomUUID();
   const now = Date.now();
-  currentSaveCount += 1;
+
+  saveCount += 1;
 
   const snapshot: SceneSnapshot = {
     snapshotId,
@@ -91,42 +94,20 @@ export async function saveSnapshot(input: SaveSnapshotInput): Promise<string> {
   const meta: AutoSaveMeta = {
     sessionId,
     latestSnapshotId: snapshotId,
-    saveCount: currentSaveCount,
+    saveCount,
     lastSavedAt: now,
     appVersion: APP_VERSION,
     status: 'active',
   };
 
   try {
-    const tx = db.transaction(
-      [SCENE_SNAPSHOTS_STORE, AUTO_SAVE_META_STORE],
-      'readwrite',
-    );
-    await Promise.all([
-      tx.objectStore(SCENE_SNAPSHOTS_STORE).put(snapshot),
-      tx.objectStore(AUTO_SAVE_META_STORE).put(meta),
-      tx.done,
-    ]);
-    return snapshotId;
+    await atomicWrite(db, snapshot, meta);
   } catch (error) {
-    // Check for QuotaExceededError
-    if (
-      error instanceof DOMException &&
-      error.name === 'QuotaExceededError'
-    ) {
-      // Purge oldest snapshots and retry
-      await purgeOldSnapshots(sessionId);
+    if (isQuotaExceeded(error)) {
+      // Purge oldest snapshots and retry once
+      await purgeOldestSnapshots(db, sessionId);
       try {
-        const retryTx = db.transaction(
-          [SCENE_SNAPSHOTS_STORE, AUTO_SAVE_META_STORE],
-          'readwrite',
-        );
-        await Promise.all([
-          retryTx.objectStore(SCENE_SNAPSHOTS_STORE).put(snapshot),
-          retryTx.objectStore(AUTO_SAVE_META_STORE).put(meta),
-          retryTx.done,
-        ]);
-        return snapshotId;
+        await atomicWrite(db, snapshot, meta);
       } catch (retryError) {
         throw new PersistenceError(
           'Storage quota exceeded even after purge',
@@ -134,114 +115,175 @@ export async function saveSnapshot(input: SaveSnapshotInput): Promise<string> {
           retryError,
         );
       }
+    } else {
+      throw new PersistenceError(
+        'Failed to save snapshot',
+        PersistenceErrorCode.TRANSACTION_FAILED,
+        error,
+      );
     }
-    throw new PersistenceError(
-      'Failed to save snapshot',
-      PersistenceErrorCode.TRANSACTION_FAILED,
-      error,
+  }
+
+  return snapshotId;
+}
+
+/**
+ * Perform the atomic dual-store write in a single transaction.
+ */
+async function atomicWrite(
+  db: IDBDatabase,
+  snapshot: SceneSnapshot,
+  meta: AutoSaveMeta,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(
+      [STORE_SCENE_SNAPSHOTS, STORE_AUTO_SAVE_META],
+      'readwrite',
     );
-  }
+    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve();
+
+    tx.objectStore(STORE_SCENE_SNAPSHOTS).put(snapshot);
+    tx.objectStore(STORE_AUTO_SAVE_META).put(meta);
+  });
 }
 
 // ---------------------------------------------------------------------------
-// closeSession — marks session as 'closed' (graceful shutdown)
+// closeSession() — T-UNIT-REL-001-04
 // ---------------------------------------------------------------------------
 
 /**
- * Marks the current session as 'closed' in auto-save-meta.
- * Called from the beforeunload handler to distinguish graceful close
- * from a crash (where status remains 'active').
+ * Mark the current session as 'closed' in auto-save-meta.
+ * Called from the beforeunload handler for graceful close.
  */
-export async function closeSession(): Promise<void> {
-  if (!currentSessionId) return;
+export async function closeSession(sessionId?: string): Promise<void> {
+  const db = await openDB();
+  const sid = sessionId ?? currentSessionId;
+  if (!sid) return;
 
-  try {
-    const db = await getDB();
-    const tx = db.transaction(AUTO_SAVE_META_STORE, 'readwrite');
-    const store = tx.objectStore(AUTO_SAVE_META_STORE);
-    const record = await store.get(currentSessionId) as AutoSaveMeta | undefined;
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_AUTO_SAVE_META, 'readwrite');
+    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve();
 
-    if (record) {
-      await store.put({ ...record, status: 'closed' as const });
-    }
-    await tx.done;
-  } catch {
-    // Best-effort on close — don't throw during beforeunload
-    console.warn('[persistenceService] Failed to close session gracefully');
-  }
+    const store = tx.objectStore(STORE_AUTO_SAVE_META);
+    const getReq = store.get(sid);
+    getReq.onsuccess = () => {
+      const record = getReq.result as AutoSaveMeta | undefined;
+      if (record) {
+        store.put({ ...record, status: 'closed' });
+      }
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
-// loadSnapshot — retrieve a specific snapshot by ID
+// loadSnapshot()
 // ---------------------------------------------------------------------------
 
 /**
- * Loads a scene snapshot by its snapshotId.
+ * Load a specific snapshot by its ID.
  */
-export async function loadSnapshot(
-  snapshotId: string,
-): Promise<SceneSnapshot | undefined> {
-  const db = await getDB();
-  return db.get(SCENE_SNAPSHOTS_STORE, snapshotId) as Promise<SceneSnapshot | undefined>;
+export async function loadSnapshot(snapshotId: string): Promise<SceneSnapshot | null> {
+  const db = await openDB();
+
+  return new Promise<SceneSnapshot | null>((resolve, reject) => {
+    const tx = db.transaction(STORE_SCENE_SNAPSHOTS, 'readonly');
+    const req = tx.objectStore(STORE_SCENE_SNAPSHOTS).get(snapshotId);
+    req.onsuccess = () => resolve((req.result as SceneSnapshot) ?? null);
+    req.onerror = () => reject(req.error);
+  });
 }
 
 // ---------------------------------------------------------------------------
-// purgeOldSnapshots — keeps only the N most recent snapshots per session
+// purgeSession()
 // ---------------------------------------------------------------------------
 
 /**
- * Deletes all but the most recent MAX_RETAINED_SNAPSHOTS snapshots
- * for the given session. Used for quota recovery.
- */
-export async function purgeOldSnapshots(sessionId: string): Promise<number> {
-  const db = await getDB();
-
-  // Get all snapshots for this session
-  const allSnapshots = await db.getAllFromIndex(
-    SCENE_SNAPSHOTS_STORE,
-    'sessionId',
-    sessionId,
-  ) as SceneSnapshot[];
-
-  if (allSnapshots.length <= MAX_RETAINED_SNAPSHOTS) return 0;
-
-  // Sort by timestamp descending, keep the newest
-  const sorted = allSnapshots.sort((a, b) => b.timestamp - a.timestamp);
-  const toDelete = sorted.slice(MAX_RETAINED_SNAPSHOTS);
-
-  const tx = db.transaction(SCENE_SNAPSHOTS_STORE, 'readwrite');
-  const store = tx.objectStore(SCENE_SNAPSHOTS_STORE);
-  for (const snap of toDelete) {
-    store.delete(snap.snapshotId);
-  }
-  await tx.done;
-
-  return toDelete.length;
-}
-
-// ---------------------------------------------------------------------------
-// purgeSession — remove all data for a session (used after discard)
-// ---------------------------------------------------------------------------
-
-/**
- * Removes all snapshots and meta for a given session.
+ * Remove all data for a given session (meta + all snapshots).
+ * Used when the user discards a recovery candidate.
  */
 export async function purgeSession(sessionId: string): Promise<void> {
-  const db = await getDB();
+  const db = await openDB();
 
-  const allSnapshots = await db.getAllFromIndex(
-    SCENE_SNAPSHOTS_STORE,
-    'sessionId',
-    sessionId,
-  ) as SceneSnapshot[];
+  // Get all snapshot IDs for this session
+  const snapshotIds = await new Promise<string[]>((resolve, reject) => {
+    const tx = db.transaction(STORE_SCENE_SNAPSHOTS, 'readonly');
+    const index = tx.objectStore(STORE_SCENE_SNAPSHOTS).index('sessionId');
+    const req = index.getAll(IDBKeyRange.only(sessionId));
+    req.onsuccess = () => {
+      const snapshots = req.result as SceneSnapshot[];
+      resolve(snapshots.map((s) => s.snapshotId));
+    };
+    req.onerror = () => reject(req.error);
+  });
 
-  const tx = db.transaction(
-    [SCENE_SNAPSHOTS_STORE, AUTO_SAVE_META_STORE],
-    'readwrite',
-  );
-  for (const snap of allSnapshots) {
-    tx.objectStore(SCENE_SNAPSHOTS_STORE).delete(snap.snapshotId);
-  }
-  tx.objectStore(AUTO_SAVE_META_STORE).delete(sessionId);
-  await tx.done;
+  // Delete all in one transaction
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(
+      [STORE_SCENE_SNAPSHOTS, STORE_AUTO_SAVE_META],
+      'readwrite',
+    );
+    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve();
+
+    const snapStore = tx.objectStore(STORE_SCENE_SNAPSHOTS);
+    for (const id of snapshotIds) {
+      snapStore.delete(id);
+    }
+    tx.objectStore(STORE_AUTO_SAVE_META).delete(sessionId);
+  });
 }
+
+// ---------------------------------------------------------------------------
+// Quota management — T-UNIT-REL-001-07
+// ---------------------------------------------------------------------------
+
+/**
+ * Purge oldest snapshots for a session, keeping only the most recent
+ * MAX_SNAPSHOTS_PER_SESSION entries.
+ */
+async function purgeOldestSnapshots(
+  db: IDBDatabase,
+  sessionId: string,
+): Promise<void> {
+  const allSnapshots = await new Promise<SceneSnapshot[]>((resolve, reject) => {
+    const tx = db.transaction(STORE_SCENE_SNAPSHOTS, 'readonly');
+    const index = tx.objectStore(STORE_SCENE_SNAPSHOTS).index('sessionId');
+    const req = index.getAll(IDBKeyRange.only(sessionId));
+    req.onsuccess = () => resolve(req.result as SceneSnapshot[]);
+    req.onerror = () => reject(req.error);
+  });
+
+  // Sort by timestamp descending, keep first MAX_SNAPSHOTS_PER_SESSION
+  const sorted = allSnapshots.sort((a, b) => b.timestamp - a.timestamp);
+  const toDelete = sorted.slice(MAX_SNAPSHOTS_PER_SESSION).map((s) => s.snapshotId);
+
+  if (toDelete.length === 0) return;
+
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_SCENE_SNAPSHOTS, 'readwrite');
+    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve();
+    const store = tx.objectStore(STORE_SCENE_SNAPSHOTS);
+    for (const id of toDelete) {
+      store.delete(id);
+    }
+  });
+}
+
+/**
+ * Check if an error is a QuotaExceededError.
+ */
+function isQuotaExceeded(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return (
+      error.name === 'QuotaExceededError' ||
+      error.message.includes('QuotaExceededError')
+    );
+  }
+  return false;
+}
+
+export type { SceneSnapshot, AutoSaveMeta, BrickRecord, CameraState, SceneMetadata };
+export { PersistenceError, PersistenceErrorCode };

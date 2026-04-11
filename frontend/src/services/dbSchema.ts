@@ -1,30 +1,24 @@
 /**
- * IndexedDB Schema for LegoBuilder Auto-Save
+ * IndexedDB Schema Definition — NFR-REL-001
  *
  * Database: legobuilder-v1
- * Stores:
- *   - scene-snapshots: Full scene state snapshots
- *   - auto-save-meta: Session metadata for crash detection
+ * Object Stores:
+ *   - scene-snapshots: Full scene state snapshots (keyPath: snapshotId)
+ *   - auto-save-meta: Session metadata for crash detection (keyPath: sessionId)
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
  */
 
-import { openDB, type IDBPDatabase } from 'idb';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 export const DB_NAME = 'legobuilder-v1';
 export const DB_VERSION = 1;
-export const SCENE_SNAPSHOTS_STORE = 'scene-snapshots';
-export const AUTO_SAVE_META_STORE = 'auto-save-meta';
 export const CURRENT_SCHEMA_VERSION = 1;
-export const MAX_RETAINED_SNAPSHOTS = 10;
+
+export const STORE_SCENE_SNAPSHOTS = 'scene-snapshots';
+export const STORE_AUTO_SAVE_META = 'auto-save-meta';
 
 // ---------------------------------------------------------------------------
-// Types
+// Types (LLD Section 3.1)
 // ---------------------------------------------------------------------------
 
 export interface BrickRecord {
@@ -75,7 +69,7 @@ export interface RecoveryCandidate {
 }
 
 // ---------------------------------------------------------------------------
-// Error Types
+// Error types (LLD Section 4.2)
 // ---------------------------------------------------------------------------
 
 export enum PersistenceErrorCode {
@@ -98,57 +92,85 @@ export class PersistenceError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Database Connection
+// Database initialization
 // ---------------------------------------------------------------------------
 
-let dbInstance: IDBPDatabase | null = null;
+let dbInstance: IDBDatabase | null = null;
 
 /**
- * Opens (or returns cached) the legobuilder-v1 IndexedDB database.
- * Creates object stores and indexes on first open / version upgrade.
+ * Open (or create) the legobuilder IndexedDB database.
+ * Uses a singleton pattern — subsequent calls return the cached instance.
  */
-export async function getDB(): Promise<IDBPDatabase> {
+export async function openDB(): Promise<IDBDatabase> {
   if (dbInstance) return dbInstance;
 
-  try {
-    dbInstance = await openDB(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        // scene-snapshots store
-        if (!db.objectStoreNames.contains(SCENE_SNAPSHOTS_STORE)) {
-          const snapStore = db.createObjectStore(SCENE_SNAPSHOTS_STORE, {
-            keyPath: 'snapshotId',
-          });
-          snapStore.createIndex('sessionId', 'sessionId', { unique: false });
-          snapStore.createIndex('timestamp', 'timestamp', { unique: false });
-        }
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-        // auto-save-meta store
-        if (!db.objectStoreNames.contains(AUTO_SAVE_META_STORE)) {
-          const metaStore = db.createObjectStore(AUTO_SAVE_META_STORE, {
-            keyPath: 'sessionId',
-          });
-          metaStore.createIndex('lastSavedAt', 'lastSavedAt', { unique: false });
-          metaStore.createIndex('status', 'status', { unique: false });
-        }
-      },
-    });
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
 
-    return dbInstance;
-  } catch (error) {
-    throw new PersistenceError(
-      'Failed to open IndexedDB',
-      PersistenceErrorCode.DB_OPEN_FAILED,
-      error,
-    );
-  }
+      if (!db.objectStoreNames.contains(STORE_SCENE_SNAPSHOTS)) {
+        const snapStore = db.createObjectStore(STORE_SCENE_SNAPSHOTS, {
+          keyPath: 'snapshotId',
+        });
+        snapStore.createIndex('sessionId', 'sessionId', { unique: false });
+        snapStore.createIndex('timestamp', 'timestamp', { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_AUTO_SAVE_META)) {
+        const metaStore = db.createObjectStore(STORE_AUTO_SAVE_META, {
+          keyPath: 'sessionId',
+        });
+        metaStore.createIndex('lastSavedAt', 'lastSavedAt', { unique: false });
+        metaStore.createIndex('status', 'status', { unique: false });
+      }
+    };
+
+    request.onsuccess = () => {
+      dbInstance = request.result;
+
+      // Handle unexpected close (e.g., browser clearing storage)
+      dbInstance.onclose = () => {
+        dbInstance = null;
+      };
+
+      resolve(dbInstance);
+    };
+
+    request.onerror = () => {
+      reject(
+        new PersistenceError(
+          'Failed to open IndexedDB',
+          PersistenceErrorCode.DB_OPEN_FAILED,
+          request.error,
+        ),
+      );
+    };
+  });
 }
 
 /**
- * Close the cached database connection. Used in tests and cleanup.
+ * Close the database connection and clear the singleton.
+ * Used primarily in tests.
  */
 export function closeDB(): void {
   if (dbInstance) {
     dbInstance.close();
     dbInstance = null;
   }
+}
+
+/**
+ * Validate that a snapshot is structurally sound.
+ * Returns true if the snapshot has valid bricks array and compatible schema version.
+ */
+export function isValidSnapshot(snapshot: unknown): snapshot is SceneSnapshot {
+  if (snapshot === null || typeof snapshot !== 'object') return false;
+  const s = snapshot as Record<string, unknown>;
+  if (!Array.isArray(s.bricks)) return false;
+  if (typeof s.schemaVersion !== 'number' || s.schemaVersion > CURRENT_SCHEMA_VERSION) return false;
+  if (typeof s.snapshotId !== 'string') return false;
+  if (typeof s.sessionId !== 'string') return false;
+  return true;
 }

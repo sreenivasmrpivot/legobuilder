@@ -1,8 +1,9 @@
 /**
- * Persistence Store — Zustand store bridging persistence services to React
+ * Persistence Store — NFR-REL-001
  *
- * Manages auto-save status, crash recovery state, and provides
- * actions for triggering saves and session lifecycle.
+ * Zustand store that bridges the persistence and crash recovery services
+ * to the React component tree. Manages auto-save status, recovery state,
+ * and provides actions for the UI.
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
@@ -14,6 +15,7 @@ import {
   closeSession,
   loadSnapshot,
   purgeSession,
+  getSessionId,
   resetSession,
   type SaveSnapshotInput,
 } from '../services/persistenceService';
@@ -33,19 +35,20 @@ export interface PersistenceState {
   // Auto-save
   autoSaveStatus: AutoSaveStatus;
   lastSavedAt: number | null;
-  saveError: string | null;
+  saveCount: number;
+  sessionId: string | null;
 
   // Recovery
   recoveryCandidate: RecoveryCandidate | null;
-  isCheckingRecovery: boolean;
+  isRecoveryPromptVisible: boolean;
 
   // Actions
   triggerAutoSave: (input: SaveSnapshotInput) => Promise<void>;
   markSessionClosed: () => Promise<void>;
-  checkForRecovery: () => Promise<RecoveryCandidate | null>;
+  checkForCrashRecovery: () => Promise<void>;
   acceptRecovery: () => Promise<SceneSnapshot | null>;
-  rejectRecovery: () => Promise<void>;
-  resetAutoSaveStatus: () => void;
+  discardRecoveryAction: () => Promise<void>;
+  dismissRecoveryPrompt: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,101 +59,112 @@ export const usePersistenceStore = create<PersistenceState>((set, get) => ({
   // Initial state
   autoSaveStatus: 'idle',
   lastSavedAt: null,
-  saveError: null,
-  recoveryCandidate: null,
-  isCheckingRecovery: false,
+  saveCount: 0,
+  sessionId: null,
 
-  /**
-   * Triggers an auto-save of the current scene state.
-   */
+  recoveryCandidate: null,
+  isRecoveryPromptVisible: false,
+
+  // ---------------------------------------------------------------------------
+  // triggerAutoSave
+  // ---------------------------------------------------------------------------
   triggerAutoSave: async (input: SaveSnapshotInput) => {
-    set({ autoSaveStatus: 'saving', saveError: null });
+    set({ autoSaveStatus: 'saving' });
+
     try {
       await saveSnapshot(input);
-      set({ autoSaveStatus: 'saved', lastSavedAt: Date.now() });
+      const sessionId = getSessionId();
+      set((state) => ({
+        autoSaveStatus: 'saved',
+        lastSavedAt: Date.now(),
+        saveCount: state.saveCount + 1,
+        sessionId,
+      }));
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Unknown save error';
-      set({ autoSaveStatus: 'error', saveError: message });
       console.error('[persistenceStore] Auto-save failed:', error);
+      set({ autoSaveStatus: 'error' });
     }
   },
 
-  /**
-   * Marks the current session as closed (graceful shutdown).
-   */
+  // ---------------------------------------------------------------------------
+  // markSessionClosed — called from beforeunload
+  // ---------------------------------------------------------------------------
   markSessionClosed: async () => {
     try {
       await closeSession();
-    } catch {
-      // Best-effort — don't block beforeunload
+    } catch (error) {
+      // Best-effort on unload — don't throw
+      console.error('[persistenceStore] Failed to close session:', error);
     }
   },
 
-  /**
-   * Checks for a crash recovery candidate on app startup.
-   */
-  checkForRecovery: async () => {
-    set({ isCheckingRecovery: true });
+  // ---------------------------------------------------------------------------
+  // checkForCrashRecovery — called on app boot
+  // ---------------------------------------------------------------------------
+  checkForCrashRecovery: async () => {
     try {
       const candidate = await detectCrash();
-      set({ recoveryCandidate: candidate, isCheckingRecovery: false });
-      return candidate;
-    } catch {
-      set({ isCheckingRecovery: false });
-      return null;
+      if (candidate) {
+        set({
+          recoveryCandidate: candidate,
+          isRecoveryPromptVisible: true,
+        });
+      }
+    } catch (error) {
+      console.error('[persistenceStore] Crash detection failed:', error);
     }
   },
 
-  /**
-   * User accepted recovery — load the snapshot and return it.
-   */
+  // ---------------------------------------------------------------------------
+  // acceptRecovery — user clicks "Resume"
+  // ---------------------------------------------------------------------------
   acceptRecovery: async () => {
     const { recoveryCandidate } = get();
     if (!recoveryCandidate) return null;
 
     try {
       const snapshot = await loadSnapshot(recoveryCandidate.snapshotId);
-      // Mark the recovered session as closed so it doesn't trigger again
-      const db = await import('../services/dbSchema').then((m) => m.getDB());
-      const tx = db.transaction('auto-save-meta', 'readwrite');
-      const store = tx.objectStore('auto-save-meta');
-      const meta = await store.get(recoveryCandidate.sessionId);
-      if (meta) {
-        await store.put({ ...meta, status: 'closed' });
-      }
-      await tx.done;
 
-      set({ recoveryCandidate: null });
-      resetSession(); // Start a fresh session for new work
-      return snapshot ?? null;
+      // Mark the old session as closed so it won't trigger recovery again
+      await closeSession(recoveryCandidate.sessionId);
+
+      set({
+        isRecoveryPromptVisible: false,
+        recoveryCandidate: null,
+      });
+
+      return snapshot;
     } catch (error) {
-      console.error('[persistenceStore] Failed to accept recovery:', error);
-      set({ recoveryCandidate: null });
+      console.error('[persistenceStore] Recovery failed:', error);
+      set({ isRecoveryPromptVisible: false });
       return null;
     }
   },
 
-  /**
-   * User rejected recovery — discard the saved session.
-   */
-  rejectRecovery: async () => {
+  // ---------------------------------------------------------------------------
+  // discardRecoveryAction — user clicks "Discard"
+  // ---------------------------------------------------------------------------
+  discardRecoveryAction: async () => {
     const { recoveryCandidate } = get();
     if (!recoveryCandidate) return;
 
     try {
-      await discardRecovery(recoveryCandidate);
-    } catch {
-      // Best-effort discard
+      await discardRecovery(recoveryCandidate.sessionId);
+    } catch (error) {
+      console.error('[persistenceStore] Discard failed:', error);
     }
-    set({ recoveryCandidate: null });
+
     resetSession();
+    set({
+      isRecoveryPromptVisible: false,
+      recoveryCandidate: null,
+    });
   },
 
-  /**
-   * Reset auto-save status to idle.
-   */
-  resetAutoSaveStatus: () => {
-    set({ autoSaveStatus: 'idle', saveError: null });
+  // ---------------------------------------------------------------------------
+  // dismissRecoveryPrompt
+  // ---------------------------------------------------------------------------
+  dismissRecoveryPrompt: () => {
+    set({ isRecoveryPromptVisible: false });
   },
 }));

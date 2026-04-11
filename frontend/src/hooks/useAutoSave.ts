@@ -1,8 +1,8 @@
 /**
- * useAutoSave Hook — interval-based auto-save with beforeunload cleanup
+ * useAutoSave Hook — NFR-REL-001
  *
- * Registers a periodic auto-save interval and a beforeunload listener
- * that marks the session as closed on graceful tab close.
+ * Interval-based auto-save with beforeunload listener for graceful close.
+ * Uses the persistenceStore to trigger saves and mark sessions closed.
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
@@ -12,41 +12,42 @@
 import { useEffect, useRef } from 'react';
 import { usePersistenceStore } from '../stores/persistenceStore';
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
 export const AUTO_SAVE_INTERVAL_MS = 5_000;
 
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
 /**
- * Hook that auto-saves the scene at a configurable interval and
- * marks the session as closed when the user closes the tab.
+ * Auto-save hook that:
+ * 1. Sets up an interval to trigger auto-save every `intervalMs` milliseconds.
+ * 2. Registers a `beforeunload` listener that marks the session as closed
+ *    for graceful tab/browser close detection.
+ * 3. Cleans up both on unmount.
  *
  * @param intervalMs - Auto-save interval in milliseconds (default: 5000)
  */
 export function useAutoSave(intervalMs = AUTO_SAVE_INTERVAL_MS): void {
   const isSavingRef = useRef(false);
+  const { triggerAutoSave, markSessionClosed } = usePersistenceStore();
 
   useEffect(() => {
-    const { triggerAutoSave, markSessionClosed } =
-      usePersistenceStore.getState();
-
-    // --- beforeunload: mark session as closed on graceful close ---
+    // --- beforeunload handler ---
     const handleBeforeUnload = (): void => {
       markSessionClosed();
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
 
-    // --- Interval: periodic auto-save ---
+    // --- Interval-based auto-save ---
     const intervalId = setInterval(async () => {
       if (isSavingRef.current) return;
       isSavingRef.current = true;
       try {
-        await triggerAutoSave({
-          bricks: [],
-          cameraState: { position: [0, 10, 20], target: [0, 0, 0], zoom: 1 },
-          sceneMetadata: {
-            name: 'Untitled',
-            createdAt: Date.now(),
-            lastModifiedAt: Date.now(),
-          },
-        });
+        await triggerAutoSave();
       } finally {
         isSavingRef.current = false;
       }
@@ -57,7 +58,7 @@ export function useAutoSave(intervalMs = AUTO_SAVE_INTERVAL_MS): void {
       clearInterval(intervalId);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [intervalMs]);
+  }, [intervalMs, triggerAutoSave, markSessionClosed]);
 }
 
 export default useAutoSave;

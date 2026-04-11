@@ -1,23 +1,18 @@
 /**
- * ResumePrompt — Accessible modal for crash recovery
+ * ResumePrompt Component — NFR-REL-001
  *
- * Displays a dialog prompting the user to resume or discard
- * a previously auto-saved session detected at boot time.
- *
- * Accessibility:
- *   - role="dialog" with aria-modal="true"
- *   - aria-labelledby pointing to the dialog title
- *   - Focus management (Resume button auto-focused)
+ * Accessible modal dialog shown when a crashed/unclosed session is detected.
+ * Displays the brick count and last saved time, with Resume and Discard actions.
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
  * Spectra-Tests: T-UNIT-REL-001-05
  */
 
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 
 // ---------------------------------------------------------------------------
-// Props
+// Types
 // ---------------------------------------------------------------------------
 
 export interface ResumePromptProps {
@@ -36,55 +31,75 @@ export function ResumePrompt({
   lastSavedAt,
   onResume,
   onDiscard,
-}: ResumePromptProps): React.JSX.Element {
-  const resumeButtonRef = useRef<HTMLButtonElement>(null);
+}: ResumePromptProps): React.ReactElement {
   const savedTime = new Date(lastSavedAt).toLocaleTimeString();
-
-  // Auto-focus the Resume button when the dialog mounts
-  useEffect(() => {
-    resumeButtonRef.current?.focus();
-  }, []);
 
   return (
     <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50"
       role="dialog"
       aria-modal="true"
       aria-labelledby="resume-prompt-title"
       data-testid="resume-prompt"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        zIndex: 9999,
+      }}
     >
-      <div className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
-        <h2
-          id="resume-prompt-title"
-          className="text-lg font-semibold text-gray-900 mb-3"
-        >
+      <div
+        style={{
+          backgroundColor: '#fff',
+          borderRadius: '8px',
+          padding: '24px',
+          maxWidth: '420px',
+          width: '100%',
+          boxShadow: '0 4px 24px rgba(0, 0, 0, 0.2)',
+        }}
+      >
+        <h2 id="resume-prompt-title" style={{ margin: '0 0 12px 0' }}>
           Resume your session?
         </h2>
-
-        <p className="text-gray-600 mb-6">
+        <p style={{ margin: '0 0 20px 0', color: '#555' }}>
           Your last session was auto-saved with{' '}
-          <span
-            data-testid="resume-prompt-brick-count"
-            className="font-medium text-gray-900"
-          >
+          <span data-testid="resume-prompt-brick-count" style={{ fontWeight: 'bold' }}>
             {brickCount}
           </span>{' '}
           brick{brickCount !== 1 ? 's' : ''} at {savedTime}.
         </p>
-
-        <div className="flex gap-3 justify-end">
+        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
           <button
             data-testid="discard-btn"
             onClick={onDiscard}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400"
+            style={{
+              padding: '8px 16px',
+              border: '1px solid #ccc',
+              borderRadius: '4px',
+              backgroundColor: '#f5f5f5',
+              cursor: 'pointer',
+              fontSize: '14px',
+            }}
           >
             Discard
           </button>
           <button
-            ref={resumeButtonRef}
             data-testid="resume-btn"
             onClick={onResume}
-            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
+            style={{
+              padding: '8px 16px',
+              border: 'none',
+              borderRadius: '4px',
+              backgroundColor: '#2563eb',
+              color: '#fff',
+              cursor: 'pointer',
+              fontSize: '14px',
+            }}
           >
             Resume
           </button>

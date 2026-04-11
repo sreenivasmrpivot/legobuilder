@@ -1,9 +1,9 @@
 /**
- * Crash Recovery Service — boot-time crash detection
+ * Crash Recovery Service — NFR-REL-001
  *
- * On app startup, checks IndexedDB for sessions with status='active'
- * (indicating the previous session did not close gracefully).
- * Returns a RecoveryCandidate if a recoverable session is found.
+ * Boot-time crash detection: scans IndexedDB for sessions with status='active'
+ * (indicating the previous session did not close gracefully) and returns a
+ * recovery candidate for the user to accept or discard.
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
@@ -11,172 +11,165 @@
  */
 
 import {
-  getDB,
-  AUTO_SAVE_META_STORE,
-  SCENE_SNAPSHOTS_STORE,
+  openDB,
+  STORE_SCENE_SNAPSHOTS,
+  STORE_AUTO_SAVE_META,
   CURRENT_SCHEMA_VERSION,
-  PersistenceError,
-  PersistenceErrorCode,
+  isValidSnapshot,
   type AutoSaveMeta,
   type SceneSnapshot,
   type RecoveryCandidate,
 } from './dbSchema';
 
 // ---------------------------------------------------------------------------
-// Snapshot Validation
+// detectCrash() — T-UNIT-REL-001-02, T-UNIT-REL-001-03
 // ---------------------------------------------------------------------------
 
 /**
- * Validates that a snapshot is structurally sound and compatible
- * with the current schema version.
- */
-export function isValidSnapshot(snapshot: unknown): snapshot is SceneSnapshot {
-  if (snapshot === null || typeof snapshot !== 'object') return false;
-
-  const s = snapshot as Record<string, unknown>;
-
-  // bricks must be an array
-  if (!Array.isArray(s.bricks)) return false;
-
-  // schemaVersion must be a number <= current version
-  if (
-    typeof s.schemaVersion !== 'number' ||
-    s.schemaVersion > CURRENT_SCHEMA_VERSION
-  ) {
-    return false;
-  }
-
-  // Must have required string fields
-  if (typeof s.snapshotId !== 'string') return false;
-  if (typeof s.sessionId !== 'string') return false;
-
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// detectCrash — main entry point
-// ---------------------------------------------------------------------------
-
-/**
- * Scans IndexedDB for active (non-closed) sessions.
- * Returns the most recently saved session as a RecoveryCandidate,
- * or null if no recoverable session exists.
+ * Detect if a previous session crashed (left status='active' in auto-save-meta).
  *
- * Corrupted snapshots are purged automatically.
+ * Returns the most recently saved active session as a RecoveryCandidate,
+ * or null if no recovery is needed.
+ *
+ * Handles corruption gracefully (T-UNIT-REL-001-08):
+ * - Missing snapshot → skip session
+ * - Invalid bricks array → purge and skip
+ * - Incompatible schema version → purge and skip
  */
 export async function detectCrash(): Promise<RecoveryCandidate | null> {
-  try {
-    const db = await getDB();
+  const db = await openDB();
+  return detectCrashFromDB(db);
+}
 
-    // 1. Find all active sessions
-    const activeSessions = (await db.getAllFromIndex(
-      AUTO_SAVE_META_STORE,
-      'status',
-      'active',
-    )) as AutoSaveMeta[];
+/**
+ * Internal implementation that accepts a DB instance (for testability).
+ */
+export async function detectCrashFromDB(
+  db: IDBDatabase,
+): Promise<RecoveryCandidate | null> {
+  // 1. Find all active sessions
+  const activeSessions = await getActiveSessions(db);
+  if (activeSessions.length === 0) return null;
 
-    if (activeSessions.length === 0) return null;
+  // 2. Sort by most recently saved first
+  const sorted = activeSessions.sort((a, b) => b.lastSavedAt - a.lastSavedAt);
 
-    // 2. Sort by lastSavedAt descending — pick the most recent
-    const sorted = activeSessions.sort(
-      (a, b) => b.lastSavedAt - a.lastSavedAt,
-    );
+  // 3. Try each session until we find a valid one
+  for (const session of sorted) {
+    const snapshot = await getSnapshot(db, session.latestSnapshotId);
 
-    // 3. Try each session until we find one with a valid snapshot
-    for (const meta of sorted) {
-      const snapshot = (await db.get(
-        SCENE_SNAPSHOTS_STORE,
-        meta.latestSnapshotId,
-      )) as SceneSnapshot | undefined;
+    // No snapshot found — orphaned meta
+    if (!snapshot) continue;
 
-      // No snapshot found for this meta — orphaned meta
-      if (!snapshot) {
-        continue;
-      }
-
-      // Validate snapshot integrity
-      if (!isValidSnapshot(snapshot)) {
-        // Corrupted — purge this session's data
-        await purgeCorruptedSession(meta.sessionId, meta.latestSnapshotId);
-        continue;
-      }
-
-      return {
-        sessionId: meta.sessionId,
-        snapshotId: meta.latestSnapshotId,
-        brickCount: snapshot.bricks.length,
-        lastSavedAt: meta.lastSavedAt,
-        appVersion: meta.appVersion,
-      };
+    // Validate snapshot integrity
+    if (!isValidSnapshot(snapshot)) {
+      // Corrupted data — purge this session
+      await purgeCorruptSession(db, session.sessionId, session.latestSnapshotId);
+      continue;
     }
 
-    return null;
-  } catch (error) {
-    console.error('[crashRecoveryService] detectCrash failed:', error);
-    throw new PersistenceError(
-      'Failed to detect crash recovery candidate',
-      PersistenceErrorCode.RECOVERY_FAILED,
-      error,
-    );
+    // Check schema compatibility
+    if (snapshot.schemaVersion > CURRENT_SCHEMA_VERSION) {
+      // Future schema version — incompatible, purge
+      await purgeCorruptSession(db, session.sessionId, snapshot.snapshotId);
+      continue;
+    }
+
+    // Valid recovery candidate found
+    return {
+      sessionId: session.sessionId,
+      snapshotId: session.latestSnapshotId,
+      brickCount: snapshot.bricks.length,
+      lastSavedAt: session.lastSavedAt,
+      appVersion: session.appVersion,
+    };
   }
+
+  // No valid recovery candidates
+  return null;
 }
 
 // ---------------------------------------------------------------------------
-// purgeCorruptedSession — remove corrupted data
+// discardRecovery()
 // ---------------------------------------------------------------------------
 
 /**
- * Removes a corrupted session's snapshot and meta from IndexedDB.
+ * Discard a recovery candidate — purge all data for the session.
  */
-async function purgeCorruptedSession(
+export async function discardRecovery(sessionId: string): Promise<void> {
+  const db = await openDB();
+
+  // Get all snapshot IDs for this session
+  const snapshotIds = await new Promise<string[]>((resolve, reject) => {
+    const tx = db.transaction(STORE_SCENE_SNAPSHOTS, 'readonly');
+    const index = tx.objectStore(STORE_SCENE_SNAPSHOTS).index('sessionId');
+    const req = index.getAll(IDBKeyRange.only(sessionId));
+    req.onsuccess = () => {
+      const snapshots = req.result as SceneSnapshot[];
+      resolve(snapshots.map((s) => s.snapshotId));
+    };
+    req.onerror = () => reject(req.error);
+  });
+
+  // Delete all in one transaction
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(
+      [STORE_SCENE_SNAPSHOTS, STORE_AUTO_SAVE_META],
+      'readwrite',
+    );
+    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve();
+
+    const snapStore = tx.objectStore(STORE_SCENE_SNAPSHOTS);
+    for (const id of snapshotIds) {
+      snapStore.delete(id);
+    }
+    tx.objectStore(STORE_AUTO_SAVE_META).delete(sessionId);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+async function getActiveSessions(db: IDBDatabase): Promise<AutoSaveMeta[]> {
+  return new Promise<AutoSaveMeta[]>((resolve, reject) => {
+    const tx = db.transaction(STORE_AUTO_SAVE_META, 'readonly');
+    const index = tx.objectStore(STORE_AUTO_SAVE_META).index('status');
+    const req = index.getAll(IDBKeyRange.only('active'));
+    req.onsuccess = () => resolve(req.result as AutoSaveMeta[]);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function getSnapshot(
+  db: IDBDatabase,
+  snapshotId: string,
+): Promise<SceneSnapshot | undefined> {
+  return new Promise<SceneSnapshot | undefined>((resolve, reject) => {
+    const tx = db.transaction(STORE_SCENE_SNAPSHOTS, 'readonly');
+    const req = tx.objectStore(STORE_SCENE_SNAPSHOTS).get(snapshotId);
+    req.onsuccess = () => resolve(req.result as SceneSnapshot | undefined);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Purge a corrupt session's meta and snapshot from IndexedDB.
+ */
+async function purgeCorruptSession(
+  db: IDBDatabase,
   sessionId: string,
   snapshotId: string,
 ): Promise<void> {
-  try {
-    const db = await getDB();
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(
-      [SCENE_SNAPSHOTS_STORE, AUTO_SAVE_META_STORE],
+      [STORE_SCENE_SNAPSHOTS, STORE_AUTO_SAVE_META],
       'readwrite',
     );
-    tx.objectStore(SCENE_SNAPSHOTS_STORE).delete(snapshotId);
-    tx.objectStore(AUTO_SAVE_META_STORE).delete(sessionId);
-    await tx.done;
-    console.warn(
-      `[crashRecoveryService] Purged corrupted session: ${sessionId}`,
-    );
-  } catch {
-    console.error(
-      `[crashRecoveryService] Failed to purge corrupted session: ${sessionId}`,
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// discardRecovery — user chose to discard
-// ---------------------------------------------------------------------------
-
-/**
- * Discards a recovery candidate by purging all its data from IndexedDB.
- */
-export async function discardRecovery(
-  candidate: RecoveryCandidate,
-): Promise<void> {
-  const db = await getDB();
-
-  // Get all snapshots for this session
-  const allSnapshots = (await db.getAllFromIndex(
-    SCENE_SNAPSHOTS_STORE,
-    'sessionId',
-    candidate.sessionId,
-  )) as SceneSnapshot[];
-
-  const tx = db.transaction(
-    [SCENE_SNAPSHOTS_STORE, AUTO_SAVE_META_STORE],
-    'readwrite',
-  );
-  for (const snap of allSnapshots) {
-    tx.objectStore(SCENE_SNAPSHOTS_STORE).delete(snap.snapshotId);
-  }
-  tx.objectStore(AUTO_SAVE_META_STORE).delete(candidate.sessionId);
-  await tx.done;
+    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve();
+    tx.objectStore(STORE_SCENE_SNAPSHOTS).delete(snapshotId);
+    tx.objectStore(STORE_AUTO_SAVE_META).delete(sessionId);
+  });
 }
