@@ -1,0 +1,64 @@
+{
+  "handoff_id": "009_design_complete",
+  "from_agent": "design-agent",
+  "to_agent": "gate-6a-design-review",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "app_id": "app-legobuilder-20260410",
+  "timestamp": "2026-04-11T01:37:00Z",
+  "status": "complete",
+  "summary": "Design agent completed Low-Level Design for FR-BRICK-004 (Issue #15) — Support brick rotation in 90-degree increments around the vertical axis. LLD covers: BrickRotation enum (0/90/180/270) in types/brick.ts, PlacedBrick.rotation field, RotateBrick command (execute/undo with captured previousRotation), getRotatedFootprint() in gridMath.ts (swaps studsX/studsZ at 90/270 degrees), uiStore.previewRotation (ephemeral, not undoable), sceneStore.rotateBrick() (atomic release+update+occupy), occupancyMap rotated footprint integration, useKeyboardShortcuts R key binding (place mode vs select mode), BrickMesh/GhostBrick Three.js rotation via (deg * PI) / 180, 4 sequence diagrams (preview rotate, placed brick rotate, undo, placement with rotated preview), error handling (unknown brickId early return, enum type safety, atomic occupancy), security considerations, performance budget (< 16 ms keypress-to-render), test case mapping (T-BE-BRICK-004-01, T-BE-BRICK-004-02, T-E2E-BRICK-004-01), and 6 open questions. Draft PR #64 is open on branch feature/15-fr-brick-004-design awaiting Gate 6a human design review before merge to main. Area determined as frontend (pure client-side SPA).",
+  "workflow_state": {
+    "current_phase": "design_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design"],
+    "remaining_phases": ["gate-6a-design-review", "frontend-test", "frontend-coding", "review", "release"]
+  },
+  "artifacts": [
+    {
+      "name": "Low-Level Design: FR-BRICK-004",
+      "path": "docs/features/FR-BRICK-004/LOW_LEVEL_DESIGN.md",
+      "type": "design-doc",
+      "description": "Full LLD for brick rotation: BrickRotation enum, PlacedBrick.rotation field, RotateBrick command (undo/redo), getRotatedFootprint() (footprint swap at 90/270 degrees), uiStore.previewRotation, sceneStore.rotateBrick() (atomic), occupancyMap integration, useKeyboardShortcuts R key binding, BrickMesh/GhostBrick Three.js rotation, 4 sequence diagrams, error handling, security, performance budget (< 16 ms), test case mapping (T-BE-BRICK-004-01, T-BE-BRICK-004-02, T-E2E-BRICK-004-01)"
+    },
+    {
+      "name": "Design PR #64",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/64",
+      "type": "pull-request",
+      "description": "Draft PR on branch feature/15-fr-brick-004-design — awaiting Gate 6a design review approval"
+    }
+  ],
+  "human_review_required": [
+    "[HIGH] Gate 6a Design Review — PR #64 must be reviewed and approved by a human before implementation begins. The LLD defines the RotateBrick command interface, BrickRotation enum, getRotatedFootprint() contract, and atomic sceneStore.rotateBrick() pattern that the frontend coding agent must follow.",
+    "[MEDIUM] Confirm anchor point convention for rotation (open question #3) — LLD assumes top-left stud at 0 degrees; verify this matches the visual expectation for 90/270 degree rotations.",
+    "[MEDIUM] Confirm cross-feature dependency: FR-EXPORT-001 BrickData Zod schema must add rotation field validated as one of {0, 90, 180, 270} — coordinate with FR-EXPORT-001 implementation.",
+    "[LOW] Resolve open question #1: should previewRotation persist across brick type changes in the palette, or reset to 0 degrees?",
+    "[LOW] Confirm BrickRotation enum is not already defined in the scaffold (open question #6) — check types/brick.ts before implementation."
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Review Draft PR #64 at https://github.com/sreenivasmrpivot/legobuilder/pull/64 — this is Gate 6a (Design Review)",
+      "Verify LLD at docs/features/FR-BRICK-004/LOW_LEVEL_DESIGN.md is consistent with docs/TECHNICAL_ARCHITECTURE.md and docs/PRD.md",
+      "Confirm BrickRotation enum values (0/90/180/270) align with Three.js Y-axis rotation convention",
+      "Confirm anchor point for rotation (open question #3) — top-left stud at 0 degrees",
+      "Coordinate with FR-EXPORT-001 team to add rotation field to BrickData Zod schema",
+      "Approve and merge PR #64 to main to unblock frontend-test and frontend coding agents",
+      "On approval, frontend-test agent should read the merged LLD from main before writing tests for T-BE-BRICK-004-01, T-BE-BRICK-004-02, T-E2E-BRICK-004-01"
+    ],
+    "files_to_read": [
+      "docs/features/FR-BRICK-004/LOW_LEVEL_DESIGN.md",
+      "https://github.com/sreenivasmrpivot/legobuilder/pull/64",
+      "frontend/src/types/brick.ts",
+      "frontend/src/engine/commands.ts",
+      "frontend/src/utils/gridMath.ts",
+      "frontend/src/engine/occupancyMap.ts",
+      "frontend/src/stores/uiStore.ts",
+      "frontend/src/stores/sceneStore.ts",
+      "frontend/src/hooks/useKeyboardShortcuts.ts"
+    ]
+  },
+  "issue_number": "15",
+  "fr_id": "FR-BRICK-004",
+  "branch": "feature/15-fr-brick-004-design",
+  "pr_number": 64,
+  "area": "frontend"
+}
