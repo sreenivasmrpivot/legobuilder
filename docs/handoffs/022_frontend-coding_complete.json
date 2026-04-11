@@ -1,0 +1,140 @@
+{
+  "handoff_id": "022_frontend-coding_complete",
+  "from_agent": "frontend-coding",
+  "to_agent": "frontend-review",
+  "timestamp": "2026-04-11T07:28:00Z",
+  "status": "complete",
+  "event": {
+    "event_id": "evt-fr-edit-001-frontend-coding-complete",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "app-legobuilder-20260410",
+    "causation_id": "021_frontend-test_complete"
+  },
+  "state_ref": {
+    "request_id": "8f36d70b-4f09-4eef-a432-7f3615db57e5",
+    "workflow_state_uri": "docs/handoffs/022_frontend-coding_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "app_id": "app-legobuilder-20260410",
+    "repo": "sreenivasmrpivot/legobuilder"
+  },
+  "artifacts": [
+    {
+      "name": "selectionStore (Zustand)",
+      "path": "frontend/src/stores/selectionStore.ts",
+      "type": "source-code",
+      "description": "Zustand store with subscribeWithSelector middleware. Exports SelectionState, useSelectionStore, SelectionStoreAccessor DI interface, createSelectionStoreAccessor() factory."
+    },
+    {
+      "name": "selectionManager (engine)",
+      "path": "frontend/src/engine/selectionManager.ts",
+      "type": "source-code",
+      "description": "createSelectionManager(storeAccessor) factory. selectByRaycast() with BVH raycast, instanceIndexMap lookup, 5 error conditions (LLD Section 7.1)."
+    },
+    {
+      "name": "BrickInstances (component)",
+      "path": "frontend/src/components/viewport/BrickInstances.tsx",
+      "type": "source-code",
+      "description": "InstancedMesh renderer with imperative highlight subscription (HIGHLIGHT_FACTOR=1.8). Zero React re-renders via useSelectionStore.subscribe()."
+    },
+    {
+      "name": "useSelection (hook)",
+      "path": "frontend/src/hooks/useSelection.ts",
+      "type": "source-code",
+      "description": "React hook bridging selectionStore to components. Exposes selectedBrickId, selectBrick, clearSelection, isBrickSelected."
+    },
+    {
+      "name": "Viewport (component)",
+      "path": "frontend/src/components/viewport/Viewport.tsx",
+      "type": "source-code",
+      "description": "R3F Canvas host with onPointerDown/onPointerUp handlers. DRAG_THRESHOLD_PX=4 disambiguation. Delegates to selectionManager.selectByRaycast()."
+    },
+    {
+      "name": "useKeyboardShortcuts (hook)",
+      "path": "frontend/src/hooks/useKeyboardShortcuts.ts",
+      "type": "source-code",
+      "description": "Escape key clears selection (LLD Open Question #3 resolved)."
+    },
+    {
+      "name": "main.tsx (entry point)",
+      "path": "frontend/src/main.tsx",
+      "type": "source-code",
+      "description": "Dev mode: exposes selectionStore on window.__legoApp for E2E test detection."
+    },
+    {
+      "name": "PR #73",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/73",
+      "type": "pull-request",
+      "description": "Ready-for-review PR on branch feature/13-fr-edit-001-frontend-tests — Gate 8 Frontend Code Review"
+    }
+  ],
+  "summary": {
+    "work_completed": "Implemented complete frontend for FR-EDIT-001 (Brick Selection by Click with Visual Highlight). 5 source files created/modified per LLD Section 13: selectionStore.ts (Zustand with subscribeWithSelector), selectionManager.ts (BVH raycast + DI + 5 error conditions), BrickInstances.tsx (InstancedMesh + imperative highlight), useSelection.ts (React hook), Viewport.tsx (click handler + drag disambiguation). Plus useKeyboardShortcuts.ts (Escape key) and main.tsx (dev mode store exposure).",
+    "key_findings": [
+      "subscribeWithSelector middleware is required for selector-based subscribe() used by BrickInstances.tsx",
+      "Scene traversal pattern used to find InstancedMesh avoids tight coupling between Viewport and BrickInstances",
+      "instanceIndexMap stored on mesh.userData enables selectionManager to map instanceId to brickId",
+      "DRAG_THRESHOLD_PX=4 implemented via pointerdown/pointerup distance check",
+      "All 5 error conditions from LLD Section 7.1 are handled with console.warn logging"
+    ],
+    "metrics": {
+      "files_created": 3,
+      "files_modified": 4,
+      "total_source_lines": 620,
+      "test_ids_covered": 4,
+      "acceptance_criteria_covered": 3
+    }
+  },
+  "human_review_required": [
+    {
+      "item": "Gate 8: Frontend Code Review — PR #73 must be reviewed and approved",
+      "reason": "Implementation must be verified against LLD contracts and test expectations before merge",
+      "severity": "high"
+    },
+    {
+      "item": "Verify subscribeWithSelector middleware compatibility with existing Zustand version",
+      "reason": "The store now uses subscribeWithSelector middleware which requires zustand >= 4.x",
+      "severity": "medium"
+    },
+    {
+      "item": "Confirm Viewport.tsx export change from named function to const",
+      "reason": "Changed from `export function Viewport()` to `export const Viewport: React.FC`. Verify no import breakage in parent components.",
+      "severity": "medium"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Review PR #73 at https://github.com/sreenivasmrpivot/legobuilder/pull/73",
+      "Verify selectionManager.ts matches the SelectionManagerInterface contract from LLD Section 3.1",
+      "Verify selectionStore.ts uses subscribeWithSelector and exports SelectionStoreAccessor",
+      "Verify BrickInstances.tsx uses imperative highlight (no React re-renders)",
+      "Verify Viewport.tsx implements DRAG_THRESHOLD_PX=4 disambiguation",
+      "Run vitest to confirm all unit tests pass",
+      "Approve and merge PR #73 to complete FR-EDIT-001 implementation"
+    ],
+    "files_to_read": [
+      "frontend/src/stores/selectionStore.ts",
+      "frontend/src/engine/selectionManager.ts",
+      "frontend/src/components/viewport/BrickInstances.tsx",
+      "frontend/src/hooks/useSelection.ts",
+      "frontend/src/components/viewport/Viewport.tsx",
+      "frontend/src/hooks/useKeyboardShortcuts.ts",
+      "docs/features/FR-EDIT-001/LOW_LEVEL_DESIGN.md"
+    ]
+  },
+  "workflow_state": {
+    "workflow_type": "greenfield",
+    "current_phase": "frontend_coding_complete",
+    "completed_phases": ["entry", "research", "planning", "architecture", "design", "frontend_test", "frontend_coding"],
+    "remaining_phases": ["review", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-FR-EDIT-001-CODE"],
+    "forward_pass_score": 0.95,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
