@@ -1,0 +1,133 @@
+{
+  "handoff_id": "020_frontend_test_complete",
+  "from_agent": "frontend-test",
+  "to_agent": "frontend-coding",
+  "timestamp": "2026-04-11T05:57:53Z",
+  "status": "complete",
+  "event": {
+    "event_id": "evt-frontend-test-nfr-rel-001",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "app-legobuilder-20260410",
+    "causation_id": "006_design_complete"
+  },
+  "state_ref": {
+    "request_id": "9e7d12c1-52fb-47e5-8599-9fea8b15e566",
+    "workflow_state_uri": "docs/handoffs/020_frontend_test_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "path": "sreenivasmrpivot/legobuilder"
+  },
+  "artifacts": [
+    {
+      "name": "crashRecovery.spec.ts",
+      "path": "frontend/tests/e2e/crashRecovery.spec.ts",
+      "type": "test-e2e",
+      "description": "Playwright E2E: T-BE-REL-001-01 (crash + recovery cycle) and T-BE-REL-001-02 (graceful close, no prompt)"
+    },
+    {
+      "name": "persistenceService.test.ts",
+      "path": "frontend/tests/unit/persistenceService.test.ts",
+      "type": "test-unit",
+      "description": "Vitest unit: T-UNIT-REL-001-01 (saveSnapshot atomicity), T-UNIT-REL-001-04 (quota exceeded), T-UNIT-REL-001-07 (snapshot pruning)"
+    },
+    {
+      "name": "crashRecoveryService.test.ts",
+      "path": "frontend/tests/unit/crashRecoveryService.test.ts",
+      "type": "test-unit",
+      "description": "Vitest unit: T-UNIT-REL-001-02 (detectOrphanedSession active), T-UNIT-REL-001-03 (detectOrphanedSession closed/missing)"
+    },
+    {
+      "name": "useAutoSave.test.ts",
+      "path": "frontend/tests/unit/useAutoSave.test.ts",
+      "type": "test-unit",
+      "description": "Vitest unit: T-UNIT-REL-001-05 (30s debounce fires save), T-UNIT-REL-001-06 (concurrent write guard)"
+    },
+    {
+      "name": "persistenceStore.test.ts",
+      "path": "frontend/tests/unit/persistenceStore.test.ts",
+      "type": "test-unit",
+      "description": "Vitest unit: persistenceStore Zustand slice contract tests"
+    },
+    {
+      "name": "ResumePrompt.test.tsx",
+      "path": "frontend/tests/component/ResumePrompt.test.tsx",
+      "type": "test-component",
+      "description": "Vitest component: T-UNIT-REL-001-08 (ARIA attributes, dialog role, button labels, interaction)"
+    },
+    {
+      "name": "Draft PR #71",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/71",
+      "type": "pull-request",
+      "description": "Draft PR for Gate 7 — Frontend Test Review: NFR-REL-001 Auto-Save Crash Durability"
+    }
+  ],
+  "summary": {
+    "work_completed": "Authored complete frontend test suite for NFR-REL-001 (Auto-Save Crash Durability). All 10 test cases from the LLD test mapping are covered: 2 Playwright E2E tests and 8 Vitest unit/component tests. Draft PR #71 is open on branch feature/30-nfr-rel-001-tests.",
+    "key_findings": [
+      "All 10 LLD test cases implemented: T-BE-REL-001-01/02 (E2E) + T-UNIT-REL-001-01 through -08 (unit/component)",
+      "fake-indexeddb/auto used for unit tests — jsdom does not support IndexedDB natively",
+      "vi.useFakeTimers() controls 30-second debounce deterministically in CI",
+      "Playwright browser.close({ runBeforeUnload: false }) correctly simulates browser crash",
+      "Contract-first test design: tests define interface contracts for the coding agent to implement against"
+    ],
+    "metrics": {
+      "test_files": 6,
+      "e2e_tests": 2,
+      "unit_tests": 5,
+      "component_tests": 1,
+      "total_test_cases": 10,
+      "lld_coverage": "100%"
+    }
+  },
+  "human_review_required": [
+    {
+      "item": "PR #48 (LLD design) is still a Draft — Gate 6a design review must be approved and merged before coding agent implements production code",
+      "reason": "The LLD at docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md is on branch feature/35-nfr-rel-001-design and has not been merged to main. The coding agent should read the LLD from the PR branch or wait for merge.",
+      "severity": "high"
+    },
+    {
+      "item": "PR #71 (test suite) awaits Gate 7 human review before coding agent begins implementation",
+      "reason": "Tests define the contract. Human must approve test design before coding agent implements production code against it.",
+      "severity": "medium"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read the LLD at docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md (from PR #48 branch feature/35-nfr-rel-001-design or main after merge)",
+      "Read all 6 test files in frontend/tests/unit/, frontend/tests/e2e/, and frontend/tests/component/ on branch feature/30-nfr-rel-001-tests",
+      "Implement src/services/persistenceService.ts with saveSnapshot() atomic IndexedDB transaction (idb library, single readwrite tx across scene-snapshots + auto-save-meta)",
+      "Implement src/services/crashRecoveryService.ts with detectOrphanedSession() reading auto-save-meta status field",
+      "Implement src/hooks/useAutoSave.ts with 30-second debounce, isSaving concurrent write guard, and beforeunload graceful-close marker",
+      "Implement src/stores/persistenceStore.ts Zustand slice per LLD Section 4",
+      "Implement src/components/ResumePrompt.tsx with ARIA role=dialog, aria-modal, aria-labelledby, aria-describedby, focus trap",
+      "Ensure all unit tests pass with fake-indexeddb before submitting PR",
+      "Reuse branch feature/30-nfr-rel-001-tests for implementation commits (same branch as tests)"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
+      "frontend/tests/e2e/crashRecovery.spec.ts",
+      "frontend/tests/unit/persistenceService.test.ts",
+      "frontend/tests/unit/crashRecoveryService.test.ts",
+      "frontend/tests/unit/useAutoSave.test.ts",
+      "frontend/tests/unit/persistenceStore.test.ts",
+      "frontend/tests/component/ResumePrompt.test.tsx",
+      "frontend/src/services/persistenceService.ts",
+      "frontend/package.json"
+    ]
+  },
+  "workflow_state": {
+    "workflow_type": "greenfield",
+    "current_phase": "implementation",
+    "completed_phases": ["entry", "research", "planning", "architecture", "design", "frontend-test"],
+    "remaining_phases": ["frontend-coding", "review", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-NFR-REL-001-TEST"],
+    "forward_pass_score": 0.95,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}

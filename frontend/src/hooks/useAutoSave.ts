@@ -1,29 +1,87 @@
 /**
- * Hook: useAutoSave
+ * useAutoSave Hook — NFR-REL-001 Auto-Save Crash Durability
  *
- * Debounced auto-save (5s interval) that persists the current scene
- * to IndexedDB whenever bricks change.
+ * Subscribes to sceneStore changes via Zustand subscribe() and
+ * debounces saves with a 30-second interval. Includes a concurrent
+ * write guard to prevent overlapping IndexedDB transactions.
  *
- * This is a scaffold stub. Feature implementation will be done in
- * feature branches per the PM-Issues agent's issue plan.
+ * Contract (from NFR-REL-001 LLD Section 6):
+ *   - AUTO_SAVE_INTERVAL_MS = 30_000 (30 seconds)
+ *   - Subscribes to sceneStore changes
+ *   - Debounces saves — resets timer on each scene change
+ *   - Guards against concurrent writes with isSaving ref
+ *   - Cancels debounce timer on unmount
+ *   - Unsubscribes from sceneStore on unmount
+ *
+ * @see docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md Section 6
+ *
+ * Spectra-Agent: frontend-coding
+ * Spectra-FRs: NFR-REL-001
  */
 
 import { useEffect, useRef } from 'react';
+import { persistenceService } from '../services/persistenceService';
+import { useSceneStore } from '../stores/sceneStore';
 
-const AUTO_SAVE_INTERVAL_MS = 5000;
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
-export function useAutoSave() {
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+export const AUTO_SAVE_INTERVAL_MS = 30_000; // 30 seconds
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
+/**
+ * Auto-save hook that persists scene state to IndexedDB on a debounced
+ * interval. Subscribes to the sceneStore and saves snapshots after
+ * 30 seconds of inactivity.
+ */
+export function useAutoSave(): void {
+  const isSavingRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // TODO: Implement in feature branch
-    // 1. Subscribe to scene store changes
-    // 2. Debounce with AUTO_SAVE_INTERVAL_MS
-    // 3. Serialize scene and save via persistenceService
+    const scheduleAutoSave = () => {
+      // Clear any pending debounce timer
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+      }
+
+      timerRef.current = setTimeout(async () => {
+        // Concurrent write guard — skip if a save is already in-flight
+        if (isSavingRef.current) {
+          return;
+        }
+
+        isSavingRef.current = true;
+        try {
+          const state = useSceneStore.getState();
+          const snapshot = {
+            bricks: Array.from(state.bricks?.values?.() ?? []),
+            version: 1,
+            savedAt: Date.now(),
+          };
+          await persistenceService.saveSnapshot(snapshot as never);
+        } finally {
+          isSavingRef.current = false;
+        }
+      }, AUTO_SAVE_INTERVAL_MS);
+    };
+
+    // Subscribe to sceneStore changes
+    const unsubscribe = useSceneStore.subscribe(scheduleAutoSave);
+
+    // Cleanup: unsubscribe and cancel pending timer
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      unsubscribe();
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, []);
-
-  return { autoSaveInterval: AUTO_SAVE_INTERVAL_MS };
 }
+
+export default useAutoSave;

@@ -1,0 +1,90 @@
+{
+  "handoff_id": "007_frontend-test_complete",
+  "from_agent": "frontend-test",
+  "to_agent": "frontend-coding",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "app_id": "app-legobuilder-20260410",
+  "timestamp": "2026-04-11T05:46:24+00:00",
+  "status": "complete",
+  "summary": "Frontend Test agent wrote the complete NFR-REL-001 test suite for auto-save crash durability. Delivered: 4 unit test files (persistenceService, crashRecoveryService, useAutoSave hook, persistenceStore Zustand store) + 1 component test file (ResumePrompt). Tests cover all 10 test cases from the LLD: T-BE-REL-001-01 and T-BE-REL-001-02 (E2E Playwright, already on branch from prior run) plus T-UNIT-REL-001-01 through T-UNIT-REL-001-08 (unit + component). All tests are written as red-green contracts — they will fail until the coding agent implements the production code. Branch: feature/30-nfr-rel-001-tests. PR opened as draft awaiting Gate 7 human review.",
+  "workflow_state": {
+    "current_phase": "frontend_test",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design", "frontend_test"],
+    "remaining_phases": ["frontend_coding", "frontend_review", "release"]
+  },
+  "artifacts": [
+    {
+      "name": "E2E Crash Recovery Test",
+      "path": "frontend/tests/e2e/crashRecovery.spec.ts",
+      "type": "test-e2e",
+      "description": "Playwright E2E: T-BE-REL-001-01 (crash + recovery) and T-BE-REL-001-02 (graceful close). Already on branch from prior run."
+    },
+    {
+      "name": "Unit Tests: persistenceService",
+      "path": "frontend/tests/unit/persistenceService.test.ts",
+      "type": "test-unit",
+      "description": "T-UNIT-REL-001-01 through T-UNIT-REL-001-04: atomic write, quota error, markSessionClosed, getActiveSessions"
+    },
+    {
+      "name": "Unit Tests: crashRecoveryService",
+      "path": "frontend/tests/unit/crashRecoveryService.test.ts",
+      "type": "test-unit",
+      "description": "T-UNIT-REL-001-05 through T-UNIT-REL-001-08: crash detection, latest snapshot, no crash, unknown session"
+    },
+    {
+      "name": "Unit Tests: useAutoSave hook",
+      "path": "frontend/tests/unit/useAutoSave.test.ts",
+      "type": "test-unit",
+      "description": "Debounce interval (5s), beforeunload graceful-close marker, timer reset on scene change"
+    },
+    {
+      "name": "Unit Tests: persistenceStore",
+      "path": "frontend/tests/unit/persistenceStore.test.ts",
+      "type": "test-unit",
+      "description": "Zustand store state transitions: idle→saving→saved, error, recovery snapshot, dismissResumePrompt"
+    },
+    {
+      "name": "Component Tests: ResumePrompt",
+      "path": "frontend/tests/component/ResumePrompt.test.tsx",
+      "type": "test-component",
+      "description": "ARIA dialog role, aria-modal, aria-labelledby, autoFocus, onResume, onDiscard, keyboard interaction"
+    },
+    {
+      "name": "Test PR #49",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/49",
+      "type": "pull-request",
+      "description": "Draft PR on feature/30-nfr-rel-001-tests — Gate 7 frontend test review"
+    }
+  ],
+  "human_review_required": [
+    "[HIGH] Gate 7 — Frontend Test Review: PR must be reviewed and approved before coding agent begins implementation. Tests define the acceptance contract for NFR-REL-001.",
+    "[MEDIUM] E2E crashRecovery.spec.ts (T-BE-REL-001-01/02) requires the app to be running and IndexedDB accessible in Playwright context — verify playwright.config.ts baseURL is correct for CI.",
+    "[LOW] useAutoSave.test.ts uses an inline hook stub. Once the real hook is implemented, the test import path should be updated to point to src/hooks/useAutoSave.ts."
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read all test files on branch feature/30-nfr-rel-001-tests to understand the acceptance contract",
+      "Implement src/services/persistenceService.ts per LLD Section 5 (saveSnapshot, markSessionClosed, getActiveSessions, initDb)",
+      "Implement src/services/crashRecoveryService.ts per LLD Section 5 (detectCrashedSessions, loadLatestSnapshot)",
+      "Implement src/stores/persistenceStore.ts per LLD Section 4 (Zustand store with saveStatus, recoverySnapshot, showResumePrompt)",
+      "Implement src/hooks/useAutoSave.ts per LLD Section 6 (5s debounce, beforeunload handler)",
+      "Implement src/components/ui/ResumePrompt.tsx per LLD Section 8 (ARIA dialog, autoFocus, onResume, onDiscard)",
+      "Run vitest to confirm all unit/component tests pass",
+      "Run playwright to confirm E2E crash recovery tests pass",
+      "Reuse branch feature/30-nfr-rel-001-tests — do NOT create a new branch"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
+      "frontend/tests/e2e/crashRecovery.spec.ts",
+      "frontend/tests/unit/persistenceService.test.ts",
+      "frontend/tests/unit/crashRecoveryService.test.ts",
+      "frontend/tests/unit/useAutoSave.test.ts",
+      "frontend/tests/unit/persistenceStore.test.ts",
+      "frontend/tests/component/ResumePrompt.test.tsx",
+      "frontend/src/services/persistenceService.ts",
+      "frontend/src/hooks/useAutoSave.ts",
+      "frontend/src/stores/sceneStore.ts"
+    ]
+  }
+}
