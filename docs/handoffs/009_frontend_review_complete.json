@@ -2,103 +2,102 @@
   "handoff_id": "009_frontend_review_complete",
   "from_agent": "frontend-review",
   "to_agent": "frontend-coding",
-  "timestamp": "2026-04-11T07:35:12Z",
+  "timestamp": "2026-04-11T07:35:31Z",
   "status": "changes_requested",
   "app_id": "app-legobuilder-20260410",
   "target_repo": "sreenivasmrpivot/legobuilder",
-  "issue_number": 18,
-  "pr_number": 77,
-  "summary": "Frontend review of PR #77 (NFR-REL-001 Auto-Save Crash Durability) completed with REQUEST CHANGES verdict. 2 high-severity blocking issues found: (1) useAutoSave.ts passes hardcoded empty bricks array instead of reading from sceneStore — auto-save never persists actual user work; (2) package.json has unscoped breaking changes including removed dependencies (immer, three-mesh-bvh, @vitest/coverage-v8), major version bumps (zustand v4→v5, vite v5→v6), removed scripts, and package name change. 3 medium issues: tests use inline stubs instead of production imports, purgeSession uses raw IDBKeyRange, saveSnapshot has TOCTOU race on saveCount. Architecture, type safety, error handling, accessibility, and LLD compliance are all excellent. All 10 test IDs from LLD Section 12 are covered.",
+  "summary": "Frontend Review Agent (Gate 8) reviewed PR #77 for NFR-REL-001 Auto-Save Crash Durability. Verdict: REQUEST CHANGES. 3 blocking issues found: (B1) useAutoSave passes hardcoded empty data instead of reading from sceneStore — auto-save is a no-op, (B2) package.json has out-of-scope breaking changes (removed immer, three-mesh-bvh, @vitest/coverage-v8; major bumps to zustand v5, vite v6; removed scripts; changed package name), (B3) all 4 test files use inline stubs instead of importing real production modules — zero production code coverage. 5 medium non-blocking concerns also noted: async beforeunload, TOCTOU on saveCount, raw IDBKeyRange usage, missing focus trap, resetDBPromise without db.close(). Architecture, idb usage, atomic transactions, validation, accessibility attributes, and data-testid alignment are all correct.",
   "workflow_state": {
-    "current_phase": "frontend_review_complete",
+    "current_phase": "frontend_review_changes_requested",
     "workflow_type": "pure_greenfield",
     "completed_phases": ["design", "frontend_test", "frontend_coding", "frontend_review"],
-    "remaining_phases": ["frontend_coding_fix", "frontend_review_recheck", "release"]
+    "remaining_phases": ["frontend_coding_fix", "frontend_review_re", "release"]
   },
   "review_verdict": "REQUEST_CHANGES",
   "blocking_issues": [
     {
       "id": "B1",
-      "severity": "high",
+      "severity": "critical",
       "file": "frontend/src/hooks/useAutoSave.ts",
-      "lines": "38-42",
-      "title": "Hardcoded empty bricks array — auto-save never persists actual user work",
-      "description": "triggerAutoSave([], ...) always saves 0 bricks. The hook must read actual scene state from sceneStore.getState() at save time.",
-      "fix": "Use useSceneStore.getState() inside the interval callback to read current bricks, camera, and metadata"
+      "lines": "39-44",
+      "title": "useAutoSave passes hardcoded empty data — auto-save is a no-op",
+      "description": "The interval callback passes bricks: [], hardcoded camera state, and placeholder metadata. Auto-save will always persist an empty scene. E2E test T-BE-REL-001-01 will fail.",
+      "required_fix": "Read actual scene state from sceneStore at save time using useSceneStore.getState()"
     },
     {
       "id": "B2",
       "severity": "high",
       "file": "frontend/package.json",
-      "title": "Unscoped breaking changes to package.json",
-      "description": "Removed immer, three-mesh-bvh, @vitest/coverage-v8. Major bumps: zustand v4→v5, vite v5→v6. Removed scripts: lint:fix, format, format:check, type-check, test:e2e:ui. Package name changed.",
-      "fix": "Revert all changes except adding idb to dependencies and fake-indexeddb + globals to devDependencies"
+      "title": "package.json has out-of-scope breaking changes",
+      "description": "Removed immer, three-mesh-bvh, @vitest/coverage-v8. Major bumps: zustand 4→5, vite 5→6. Removed scripts: lint:fix, format, format:check, type-check, test:e2e:ui. Package name changed.",
+      "required_fix": "Revert package.json to base, only add idb and fake-indexeddb"
+    },
+    {
+      "id": "B3",
+      "severity": "high",
+      "files": [
+        "frontend/tests/component/ResumePrompt.test.tsx",
+        "frontend/tests/unit/crashRecoveryService.test.ts",
+        "frontend/tests/unit/persistenceService.test.ts",
+        "frontend/tests/unit/useAutoSave.test.ts"
+      ],
+      "title": "All test files use inline stubs instead of real imports",
+      "description": "Every test file defines its own inline implementation rather than importing production code. Tests provide false confidence — bugs in production code would not be caught.",
+      "required_fix": "Update test imports to use real production modules. Use resetDBPromise() for test isolation."
     }
   ],
-  "medium_issues": [
+  "medium_concerns": [
     {
       "id": "M1",
-      "severity": "medium",
-      "title": "Tests use inline stubs instead of production imports",
-      "description": "All 4 test files define inline implementations rather than importing from ../../src/... Now that production code exists, tests should import real modules."
+      "title": "markSessionClosed() is async but fire-and-forget in beforeunload",
+      "file": "frontend/src/hooks/useAutoSave.ts:33"
     },
     {
       "id": "M2",
-      "severity": "medium",
-      "file": "frontend/src/services/persistenceService.ts",
-      "title": "purgeSession() uses raw IDBKeyRange.only() instead of idb wrapper",
-      "description": "Inconsistent with rest of codebase. Should use getAllFromIndex pattern like purgeOldSnapshots()."
+      "title": "existingMeta read is outside the atomic transaction",
+      "file": "frontend/src/services/persistenceService.ts:80-82"
     },
     {
       "id": "M3",
-      "severity": "low",
-      "file": "frontend/src/services/persistenceService.ts",
-      "title": "saveSnapshot() TOCTOU race on saveCount",
-      "description": "existingMeta read happens outside the atomic transaction. Mitigated by overlap guards."
-    }
-  ],
-  "positive_findings": [
-    "Excellent module architecture with clean separation of concerns",
-    "Full idb library usage per LLD Section 13",
-    "Atomic dual-store transactions in saveSnapshot()",
-    "Robust snapshot validation in isValidSnapshot()",
-    "WCAG-compliant ResumePrompt with proper ARIA attributes",
-    "All 7 data-testid attributes match E2E selectors",
-    "PersistenceError class with typed error codes",
-    "Quota exceeded purge-and-retry pattern",
-    "All 10 test IDs from LLD Section 12 covered"
-  ],
-  "test_id_coverage": {
-    "T-BE-REL-001-01": "present",
-    "T-BE-REL-001-02": "present",
-    "T-UNIT-REL-001-01": "present",
-    "T-UNIT-REL-001-02": "present",
-    "T-UNIT-REL-001-03": "present",
-    "T-UNIT-REL-001-04": "present",
-    "T-UNIT-REL-001-05": "present",
-    "T-UNIT-REL-001-06": "present",
-    "T-UNIT-REL-001-07": "present",
-    "T-UNIT-REL-001-08": "present"
-  },
-  "human_review_required": [
-    {
-      "item": "Gate 8 — Human review of blocking issues",
-      "reason": "Two high-severity issues require coding agent fixes before merge",
-      "severity": "high"
+      "title": "purgeSession() uses raw IDBKeyRange.only() instead of idb wrapper",
+      "file": "frontend/src/services/persistenceService.ts:155-161"
     },
     {
-      "item": "Verify package.json revert scope",
-      "reason": "Human should confirm which dependency changes are intentional vs accidental",
-      "severity": "medium"
+      "id": "M4",
+      "title": "Missing focus trap and Escape key handler in ResumePrompt",
+      "file": "frontend/src/components/ResumePrompt/ResumePrompt.tsx:42"
+    },
+    {
+      "id": "M5",
+      "title": "resetDBPromise() doesn't close the existing connection",
+      "file": "frontend/src/services/dbSchema.ts:130-132"
+    }
+  ],
+  "strengths": [
+    "idb library usage per LLD Section 13",
+    "Atomic dual-store transaction pattern in saveSnapshot()",
+    "Validation-first crash recovery with isValidSnapshot()",
+    "Quota exceeded purge-and-retry with PersistenceError",
+    "Singleton DB pattern with resetDBPromise() for testing",
+    "All data-testid attributes match E2E selectors",
+    "Accessible modal with role=dialog, aria-modal, aria-labelledby",
+    "Clean module separation and JSDoc documentation",
+    "Overlap guard with isSavingRef in useAutoSave"
+  ],
+  "human_review_required": [
+    {
+      "item": "Gate 8: Approve or reject frontend-review verdict",
+      "reason": "Human must confirm the 3 blocking issues before sending back to coding agent",
+      "severity": "high"
     }
   ],
   "next_agent_context": {
     "recommended_actions": [
-      "Fix useAutoSave.ts to read actual scene state from sceneStore",
-      "Revert package.json to only add idb and fake-indexeddb",
-      "Update test files to import real production modules",
-      "Address purgeSession() IDBKeyRange inconsistency",
-      "Re-request review after fixes"
+      "Fix B1: Update useAutoSave.ts to read actual scene state from sceneStore",
+      "Fix B2: Revert package.json to base, only add idb + fake-indexeddb + globals",
+      "Fix B3: Update all 4 test files to import real production modules",
+      "Address M1-M5 medium concerns if time permits",
+      "Re-run all tests after fixes"
     ],
     "files_to_modify": [
       "frontend/src/hooks/useAutoSave.ts",
@@ -106,8 +105,7 @@
       "frontend/tests/component/ResumePrompt.test.tsx",
       "frontend/tests/unit/crashRecoveryService.test.ts",
       "frontend/tests/unit/persistenceService.test.ts",
-      "frontend/tests/unit/useAutoSave.test.ts",
-      "frontend/src/services/persistenceService.ts"
+      "frontend/tests/unit/useAutoSave.test.ts"
     ]
   }
 }
