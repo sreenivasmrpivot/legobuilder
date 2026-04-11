@@ -1,0 +1,67 @@
+{
+  "handoff_id": "010_design_nfr_perf_002_complete",
+  "from_agent": "design-agent",
+  "to_agent": "gate-6a-design-review",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "app_id": "app-legobuilder-20260410",
+  "timestamp": "2026-04-11T01:39:57Z",
+  "status": "complete",
+  "summary": "Design agent completed Low-Level Design for NFR-PERF-002 (Issue #27) — Enforce <2ms raycast latency in 500-brick scenes via instrumented timing. LLD covers: module architecture (bvhManager.ts MODIFIED, raycastEngine.ts MODIFIED, performanceMonitor.ts MODIFIED, useRaycast.ts MODIFIED, raycastLatency.test.ts NEW), interface contracts (BvhManagerInterface, RaycastEngineInterface, PerformanceMonitorInterface, UseRaycastReturn), data models (RaycastSample, RaycastStats, BvhState), 4 sequence diagrams (happy path instrumented, production stripped, incremental rebuild, CI failure), BVH init algorithm (idempotent monkey-patch), instrumented raycast wrapper (performance.now() with import.meta.env.PROD guard), p95 computation algorithm, speedup measurement (naive vs BVH), 8 test cases (T-PERF-PERF-002-01 through -08), error handling (7 conditions), security considerations (timing side-channel, memory exhaustion, prototype pollution, brickId validation), performance budget (p95 <2ms, speedup >=5x, BVH build <=50ms, incremental rebuild <=5ms), CI integration (Vitest config + GitHub Actions step), and 4 open questions. Draft PR #54 is open on branch feature/27-nfr-perf-002-design awaiting Gate 6a human design review before merge to main. Area determined as frontend (pure client-side SPA).",
+  "workflow_state": {
+    "current_phase": "design_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design"],
+    "remaining_phases": ["gate-6a-design-review", "frontend-test", "frontend-coding", "frontend-review", "release"]
+  },
+  "artifacts": [
+    {
+      "name": "Low-Level Design: NFR-PERF-002",
+      "path": "docs/features/NFR-PERF-002/LOW_LEVEL_DESIGN.md",
+      "type": "design-doc",
+      "description": "Full LLD for raycast latency enforcement: BvhManagerInterface + RaycastEngineInterface + PerformanceMonitorInterface contracts, RaycastSample/RaycastStats/BvhState data models, 4 sequence diagrams, BVH idempotent monkey-patch algorithm, instrumented raycast wrapper (performance.now() + import.meta.env.PROD guard), p95 computation, speedup measurement, 8 test cases (T-PERF-PERF-002-01 through -08), 7 error conditions, security (timing side-channel, memory exhaustion, prototype pollution, UUID validation), performance budget (p95 <2ms, speedup >=5x, BVH build <=50ms, incremental rebuild <=5ms), CI integration (Vitest + GitHub Actions)"
+    },
+    {
+      "name": "Design PR #54",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/54",
+      "type": "pull-request",
+      "description": "Draft PR on branch feature/27-nfr-perf-002-design — awaiting Gate 6a design review approval"
+    },
+    {
+      "name": "Handoff JSON",
+      "path": "docs/handoffs/010_design_nfr_perf_002_complete.json",
+      "type": "handoff-json",
+      "description": "Machine-readable handoff artifact for gate router"
+    },
+    {
+      "name": "Handoff Markdown",
+      "path": "docs/handoffs/010_design_nfr_perf_002_HANDOFF.md",
+      "type": "handoff-markdown",
+      "description": "Human-readable handoff summary"
+    }
+  ],
+  "human_review_required": [
+    "[HIGH] Gate 6a Design Review — PR #54 must be reviewed and approved by a human before implementation begins. The LLD defines BvhManagerInterface, RaycastEngineInterface, PerformanceMonitorInterface, and the p95 threshold enforcement strategy that the frontend coding agent must follow.",
+    "[MEDIUM] Confirm FR-SCENE-003 (#9) exports bvhManager.ts as a module — NFR-PERF-002 extends it with registerMesh(), deregisterMesh(), rebuildBvhIncremental(), getState() (OQ-1).",
+    "[MEDIUM] Confirm three-mesh-bvh is in package.json — if not, coding agent must add it before implementation (OQ-2).",
+    "[LOW] Decide whether performance tests run on every CI push or only on PRs targeting main (OQ-3).",
+    "[LOW] Confirm jsdom performance.now() resolution is sufficient, or switch to Node.js perf_hooks.performance (OQ-4)."
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Review Draft PR #54 at https://github.com/sreenivasmrpivot/legobuilder/pull/54 — this is Gate 6a (Design Review)",
+      "Verify LLD at docs/features/NFR-PERF-002/LOW_LEVEL_DESIGN.md is consistent with docs/TECHNICAL_ARCHITECTURE.md and docs/PRD.md",
+      "Confirm FR-SCENE-003 (#9) bvhManager.ts module structure — affects whether NFR-PERF-002 extends or creates the module",
+      "Confirm three-mesh-bvh is in package.json before implementation",
+      "Resolve OQ-3: CI trigger strategy for performance tests (every push vs PRs to main)",
+      "Resolve OQ-4: jsdom vs perf_hooks.performance for test environment",
+      "Approve and merge PR #54 to main to unblock frontend-test and frontend coding agents",
+      "On approval, frontend-test agent should read the merged LLD from main before writing tests for T-PERF-PERF-002-01 through -08"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-PERF-002/LOW_LEVEL_DESIGN.md",
+      "https://github.com/sreenivasmrpivot/legobuilder/pull/54",
+      "docs/handoffs/010_design_nfr_perf_002_complete.json",
+      "docs/handoffs/010_design_nfr_perf_002_HANDOFF.md"
+    ]
+  }
+}
