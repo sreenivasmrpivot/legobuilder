@@ -1,4 +1,4 @@
-# Handoff: Frontend Review → Frontend Coding (Fix Cycle)
+# Handoff: Frontend Review → Frontend Coding (Changes Requested)
 
 **Handoff ID:** 009_frontend_review_complete
 **Date:** 2026-04-11
@@ -8,92 +8,74 @@
 
 ---
 
-## Review Verdict: ❌ CHANGES REQUESTED
+## Review Verdict: ⚠️ REQUEST CHANGES
 
-Frontend Review Agent completed Gate 8 review of PR #77 for **NFR-REL-001 — Auto-Save Crash Durability**.
+Frontend Review Agent (Gate 8) reviewed PR #77 for **NFR-REL-001 — Auto-Save Crash Durability**.
 
 **Branch:** `feature/18-nfr-rel-001-frontend-tests`
 **PR:** #77
 
 ---
 
-## 🔴 Blocking Issues (Must Fix)
+## 🔴 Blocking Issues (must fix)
 
-### BLOCK-001: useAutoSave.ts — Hardcoded placeholder data
-- **File:** `frontend/src/hooks/useAutoSave.ts` (lines 41-46)
-- **Problem:** Auto-save interval passes `[]` for bricks, hardcoded camera state `{ position: [0, 10, 20], target: [0, 0, 0], zoom: 1 }`, and hardcoded metadata. This means auto-save never persists actual scene data in production.
-- **Fix:** Read bricks, camera state, and scene metadata from `sceneStore` (or accept as hook parameters).
+### BLOCK-001: useAutoSave passes hardcoded empty data
+**File:** `frontend/src/hooks/useAutoSave.ts` (lines 42-46)
 
-### BLOCK-002: package.json — Out-of-scope dependency changes
-- **File:** `frontend/package.json`
-- **Problem:** Multiple unrelated changes:
-  - Package name changed: `legobuilder` → `legobuilder-frontend`
-  - Removed: `immer`, `three-mesh-bvh`, `@vitest/coverage-v8`
-  - Major bumps: `zustand` 4→5, `vite` 5→6
-  - Removed scripts: `lint:fix`, `format`, `format:check`, `type-check`, `test:e2e:ui`
-- **Fix:** Revert to original `package.json` and only add `idb` to dependencies and `fake-indexeddb` to devDependencies.
+The `triggerAutoSave()` call passes `bricks: []`, hardcoded camera state, and placeholder `'Untitled'` metadata. Auto-save will **always save an empty scene** regardless of user work. E2E tests T-BE-REL-001-01 and T-BE-REL-001-02 will fail.
 
----
+**Fix:** Read actual bricks from `sceneStore` (e.g., `useSceneStore.getState().bricks`) or accept a getter function as a hook parameter.
 
-## ⚠️ Non-Blocking Issues (Recommended)
+### BLOCK-002: package.json has unrelated breaking changes
+**File:** `frontend/package.json`
 
-| ID | File | Issue |
-|----|------|-------|
-| NB-001 | `dbSchema.ts` | No `closeDB()` function for connection cleanup |
-| NB-002 | `persistenceService.ts` | Empty catch block swallows errors silently |
-| NB-003 | `persistenceService.ts` | `closeSession()` silently no-ops if session missing |
-| NB-004 | `persistenceService.ts` | Cursor-based deletion could be optimized |
-| NB-005 | `persistenceStore.ts` | Redundant overlap guard (also in useAutoSave) |
-| NB-006 | `ResumePrompt.tsx` | Missing focus trap and Escape key for WCAG |
+Removes `immer`, `three-mesh-bvh`, `@vitest/coverage-v8`. Bumps `zustand` v4→v5 and `vite` v5→v6 (major versions). Removes useful scripts (`lint:fix`, `format`, `type-check`, etc.). Changes package name.
+
+**Fix:** Revert to original `package.json` and only add `idb` (production), `fake-indexeddb` (devDependency), and `globals` (devDependency).
 
 ---
 
-## ⚠️ Should-Fix Issues
+## 🟡 Medium Concerns (should fix)
 
-| ID | File | Issue |
-|----|------|-------|
-| SF-001 | `ResumePrompt.test.tsx` | Tests use inline component copy instead of importing actual implementation |
+### MED-001: Test files use inline stubs instead of real imports
+All 4 test files define their own inline implementations rather than importing production code. Tests provide zero coverage of actual implementation. Now that production code exists, tests should import real modules.
+
+### MED-002: markSessionClosed() is async fire-and-forget in beforeunload
+Browser may terminate before IDB write completes. Consider synchronous `localStorage` fallback or `navigator.sendBeacon` pattern.
+
+### MED-003: ResumePrompt lacks focus trap and Escape key handler
+Modal lacks keyboard accessibility features for WCAG 2.1 AA. Can be addressed in a follow-up PR.
 
 ---
 
-## ✅ Positive Findings
+## ✅ Passed Checks
 
-- Atomic dual-store transaction pattern correctly implemented
-- Validation-first crash recovery with schema version checking
-- Quota exceeded handling with purge-and-retry
+- idb library used (not raw IndexedDB) per LLD Section 13
+- Atomic dual-store transaction in saveSnapshot()
 - PersistenceError class with typed error codes
-- Accessible modal with correct ARIA attributes
-- All 10 test IDs from LLD Section 12 satisfied
-- All data-testid attributes match E2E selectors
-- idb library used per LLD Section 13
-- Clean code organization with JSDoc and Spectra traceability headers
-
----
-
-## Human Review Required
-
-| Item | Reason | Severity |
-|------|--------|----------|
-| Gate 8 human review | Confirm blocking issues assessment | high |
-| package.json revert scope | Verify which changes are intentional vs accidental | high |
-| Accessibility follow-up | Decide if focus trap should be tracked as separate issue | medium |
+- data-testid attributes match E2E selectors
+- Accessible modal (role=dialog, aria-modal, aria-labelledby)
+- beforeunload listener with cleanup on unmount
+- Overlap guard prevents concurrent saves
+- fake-indexeddb in devDependencies
+- Validation-first crash recovery with auto-purge
+- All 10 test IDs from LLD Section 12 covered
 
 ---
 
 ## Context for Next Agent
 
-### Recommended Actions
+### Required Actions
 
-1. Fix BLOCK-001: Update `useAutoSave.ts` to read scene data from `sceneStore`
-2. Fix BLOCK-002: Revert `package.json` to original, only add `idb` + `fake-indexeddb`
-3. Consider SF-001: Update `ResumePrompt.test.tsx` to import actual component
-4. Re-submit for review after fixes
+1. Fix `useAutoSave.ts` to read actual scene state from sceneStore
+2. Revert `package.json` to original, only add `idb` + `fake-indexeddb` + `globals`
+3. Update test files to import real production modules
+4. Re-request frontend-review after fixes
 
-### Files to Modify
+### Files to Fix
 
 - `frontend/src/hooks/useAutoSave.ts`
 - `frontend/package.json`
-- `frontend/tests/component/ResumePrompt.test.tsx`
 
 ---
 
@@ -101,7 +83,7 @@ Frontend Review Agent completed Gate 8 review of PR #77 for **NFR-REL-001 — Au
 
 - **Current phase:** frontend_review_changes_requested
 - **Completed:** design, frontend_test, frontend_coding, frontend_review
-- **Remaining:** frontend_coding_fix, frontend_review_re, release
+- **Remaining:** frontend_coding_fix, frontend_review_recheck, release
 
 ---
 
