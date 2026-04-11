@@ -1,0 +1,68 @@
+{
+  "handoff_id": "015_frontend_review_complete",
+  "from_agent": "frontend-review",
+  "to_agent": "frontend-coding",
+  "timestamp": "2026-04-11T16:08:46Z",
+  "status": "changes_requested",
+  "app_id": "app-legobuilder-20260410",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "summary": "Gate 11 re-review of PR #77 (NFR-REL-001 Auto-Save Crash Durability). B3 STILL UNRESOLVED — idb is NOT present in the dependencies section of frontend/package.json at branch HEAD (e74b67f). The PR diff against main shows NO changes to the dependencies section. GitHub code search confirms zero occurrences of idb in the file. Commit 9e9194b claims to add idb but the actual file does not contain it. This is the 5th iteration of this same blocking issue. B2-residual is now resolved — devDependencies diff shows only 3 in-scope additions. All prior findings (B1, B2, M1, M2, M3) remain resolved.",
+  "workflow_state": {
+    "current_phase": "frontend_review_recheck_3_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design", "frontend_test", "frontend_coding", "frontend_review", "frontend_coding_fix", "frontend_review_recheck", "frontend_coding_fix_2", "frontend_review_recheck_2", "frontend_coding_fix_3", "frontend_review_recheck_3"],
+    "remaining_phases": ["frontend_coding_fix_4", "frontend_review_recheck_4", "release"]
+  },
+  "review_verdict": "CHANGES_REQUESTED",
+  "pr_number": 77,
+  "branch": "feature/18-nfr-rel-001-frontend-tests",
+  "prior_findings_verification": {
+    "B1": { "status": "resolved", "verification": "useAutoSave.ts reads actual scene state from sceneStore via useSceneStore.getState()" },
+    "B2": { "status": "resolved", "verification": "package.json baseline preserved — devDependencies diff shows only 3 in-scope additions" },
+    "B2-residual": { "status": "resolved", "verification": "All out-of-scope devDeps changes reverted. Only fake-indexeddb, globals, and @vitest/coverage-v8 reorder remain." },
+    "M1": { "status": "resolved", "verification": "ResumePrompt.test.tsx and useAutoSave.test.ts import real production modules" },
+    "M2": { "status": "resolved", "verification": "console.warn added to persistenceService.ts catch block" },
+    "M3": { "status": "resolved", "verification": "console.warn added to all 4 catch blocks in persistenceStore.ts" }
+  },
+  "current_findings": {
+    "blocking": [
+      {
+        "id": "B3",
+        "severity": "high",
+        "file": "frontend/package.json",
+        "title": "idb package STILL missing from dependencies — 5th iteration",
+        "description": "PR diff against main shows NO changes to the dependencies section. GitHub code search for idb in frontend/package.json returns zero results. Commit 9e9194b claims to add idb but the actual file at branch HEAD (e74b67f) does not contain it. The dependencies section is identical to main.",
+        "impact": "Build will fail with 'Cannot find module idb'. All 6 production modules depending on dbSchema.ts will be broken.",
+        "fix": "Read the FULL package.json from main, add 'idb': '^8.0.0' to the dependencies section, push the complete file, then verify the file at branch HEAD contains idb in dependencies."
+      }
+    ],
+    "medium": [],
+    "low": [
+      { "id": "L1", "file": "frontend/src/services/dbSchema.ts", "title": "No closeDB() for HMR cleanup" },
+      { "id": "L2", "file": "frontend/src/hooks/useAutoSave.ts", "title": "markSessionClosed async in sync beforeunload" },
+      { "id": "L3", "file": "frontend/src/components/ResumePrompt/ResumePrompt.tsx", "title": "No focus trap in modal" },
+      { "id": "L4", "file": "frontend/src/services/persistenceService.ts", "title": "purgeSession() uses raw IDBKeyRange.only()" },
+      { "id": "L5", "file": "frontend/src/services/persistenceService.ts", "title": "existingMeta read outside atomic transaction" }
+    ]
+  },
+  "human_review_required": [
+    { "item": "Gate 11 — B3 fix must be applied: idb STILL missing from package.json dependencies (5th iteration)", "severity": "high" },
+    { "item": "Coding agent must verify file content at branch HEAD after pushing — not just commit message", "severity": "high" }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read the FULL frontend/package.json from main branch using get_file_contents",
+      "Add 'idb': '^8.0.0' to the dependencies section (between immer and react)",
+      "Keep the devDependencies section as-is on the branch (it already has the correct additions)",
+      "Push the complete file using create_or_update_file with the correct SHA",
+      "After pushing, use get_file_contents to read the file from branch HEAD",
+      "Verify the string 'idb' appears in the dependencies section (NOT devDependencies)",
+      "Check the PR diff to confirm the dependencies section shows the idb addition"
+    ],
+    "files_to_modify": ["frontend/package.json"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-012"],
+    "forward_pass_score": 0.95
+  }
+}
