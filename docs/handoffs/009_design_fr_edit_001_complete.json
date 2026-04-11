@@ -1,0 +1,52 @@
+{
+  "handoff_id": "009_design_fr_edit_001_complete",
+  "from_agent": "design-agent",
+  "to_agent": "gate-6a-design-review",
+  "timestamp": "2026-04-11T00:00:00Z",
+  "status": "complete",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "app_id": "app-legobuilder-20260410",
+  "issue_number": 13,
+  "fr_id": "FR-EDIT-001",
+  "area": "frontend",
+  "summary": "Design agent completed Low-Level Design for FR-EDIT-001 (Issue #13) — Implement brick selection by click with visual highlight. LLD covers: component architecture (selectionManager.ts, selectionStore.ts, Viewport.tsx modification, BrickInstances.tsx new, useSelection.ts new), interface contracts (SelectionManagerInterface, SelectionStoreAccessor, UseSelectionReturn, BrickInstancesProps), data models (PlacedBrick, SelectionState, InstanceIndexMap), four sequence diagrams (happy path, re-selection, clear on empty click, empty scene), selection algorithm (BVH raycast → instanceId → brickId lookup), highlight algorithm (color multiply by HIGHLIGHT_FACTOR=1.8), error handling (5 conditions, all silent with console.warn), security considerations (UUID validation, hex color validation), performance budget (≤2ms raycast, 0 React re-renders via imperative InstancedMesh update), drag-vs-click disambiguation (DRAG_THRESHOLD_PX=4), test case mapping (T-BE-EDIT-001-01 through -03, T-E2E-EDIT-001-01), and 6 open questions/assumptions. Draft PR is open on branch feature/13-fr-edit-001-design awaiting Gate 6a human design review before merge to main.",
+  "workflow_state": {
+    "current_phase": "design_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design"],
+    "remaining_phases": ["test", "implementation", "review", "release"]
+  },
+  "artifacts": [
+    {
+      "name": "Low-Level Design: FR-EDIT-001",
+      "path": "docs/features/FR-EDIT-001/LOW_LEVEL_DESIGN.md",
+      "type": "design-doc",
+      "description": "Full LLD for brick selection: component architecture (selectionManager.ts, selectionStore.ts, BrickInstances.tsx, useSelection.ts), SelectionManagerInterface + SelectionStoreAccessor DI, SelectionState Zustand store, InstanceIndexMap, 4 sequence diagrams, BVH raycast algorithm, color-multiply highlight (HIGHLIGHT_FACTOR=1.8), drag-vs-click disambiguation (DRAG_THRESHOLD_PX=4), error handling (5 conditions), security (UUID + hex validation), performance budget (≤2ms/500 bricks, 0 React re-renders), test case mapping (T-BE-EDIT-001-01 through -03, T-E2E-EDIT-001-01)"
+    }
+  ],
+  "human_review_required": [
+    "[HIGH] Gate 6a Design Review — Draft PR must be reviewed and approved by a human before implementation begins. The LLD defines the SelectionManagerInterface, SelectionStoreAccessor DI pattern, and imperative InstancedMesh highlight strategy that the frontend coding agent must follow.",
+    "[MEDIUM] Verify that FR-SCENE-003 (BVH raycast, #9) exposes a shared InstancedMesh ref or confirm that BrickInstances.tsx owns the mesh — open question #1 in the LLD.",
+    "[MEDIUM] Confirm three-mesh-bvh is already a project dependency (referenced in FR-SCENE-003 technical notes) — open question #2.",
+    "[LOW] Confirm PlacedBrick.rotation representation: integer step (0-3) vs radian — must align with FR-SCENE-002 LLD (open question #6).",
+    "[LOW] Validate DRAG_THRESHOLD_PX=4 is sufficient to disambiguate orbit from click on the shared canvas — open question #5."
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Review Draft PR on branch feature/13-fr-edit-001-design — this is Gate 6a (Design Review)",
+      "Verify LLD at docs/features/FR-EDIT-001/LOW_LEVEL_DESIGN.md is consistent with docs/TECHNICAL_ARCHITECTURE.md and docs/PRD.md",
+      "Confirm FR-SCENE-003 (#9) InstancedMesh ownership — BrickInstances.tsx vs scene-level mesh",
+      "Confirm three-mesh-bvh is in package.json before implementation",
+      "Resolve open question #6: PlacedBrick.rotation as integer step vs radian — must match FR-SCENE-002 LLD",
+      "Approve and merge PR to main to unblock frontend-test and frontend coding agents",
+      "On approval, frontend-test agent should read the merged LLD from main before writing tests for T-BE-EDIT-001-01 through -03 and T-E2E-EDIT-001-01"
+    ],
+    "files_to_read": [
+      "docs/features/FR-EDIT-001/LOW_LEVEL_DESIGN.md",
+      "docs/TECHNICAL_ARCHITECTURE.md",
+      "frontend/src/engine/selectionManager.ts",
+      "frontend/src/stores/selectionStore.ts",
+      "frontend/src/components/viewport/Viewport.tsx"
+    ]
+  }
+}
