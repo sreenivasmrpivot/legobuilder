@@ -1,0 +1,126 @@
+{
+  "handoff_id": "020_frontend-test_fr_scene_001_complete",
+  "from_agent": "frontend-test",
+  "to_agent": "frontend-coding",
+  "timestamp": "2026-04-11T05:58:47Z",
+  "status": "complete",
+  "event": {
+    "event_id": "evt-020-frontend-test-fr-scene-001",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "wf-app-legobuilder-20260410",
+    "causation_id": "evt-006-design-complete"
+  },
+  "state_ref": {
+    "request_id": "86a00bfd-e172-4110-b508-e9633a8caafb",
+    "workflow_state_uri": "docs/handoffs/020_frontend-test_fr_scene_001_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "path": "sreenivasmrpivot/legobuilder",
+    "app_id": "app-legobuilder-20260410"
+  },
+  "artifacts": [
+    {
+      "name": "sceneStore unit tests",
+      "path": "frontend/tests/unit/sceneStore.test.ts",
+      "type": "test",
+      "description": "Vitest unit tests for sceneStore: T-UNIT-SCENE-001-01 (default state), T-UNIT-SCENE-001-02 (setGridVisible), T-UNIT-SCENE-001-03 (setBackgroundColor)"
+    },
+    {
+      "name": "cameraStore unit tests",
+      "path": "frontend/tests/unit/cameraStore.test.ts",
+      "type": "test",
+      "description": "Vitest unit tests for cameraStore: T-UNIT-SCENE-001-04 (default isometric position [20,20,20]), T-UNIT-SCENE-001-05 (resetCamera restores defaults)"
+    },
+    {
+      "name": "ViewportCanvas component tests",
+      "path": "frontend/tests/component/ViewportCanvas.test.tsx",
+      "type": "test",
+      "description": "Vitest component tests for ViewportCanvas/SceneViewport: T-COMP-SCENE-001-01 (canvas renders), T-COMP-SCENE-001-02 (error boundary catches WebGL failure), T-COMP-SCENE-001-03 (camera props passed correctly)"
+    },
+    {
+      "name": "GroundGrid component tests",
+      "path": "frontend/tests/component/GroundGrid.test.tsx",
+      "type": "test",
+      "description": "Vitest component tests for GroundGrid: T-COMP-SCENE-001-04 (renders GridHelper with size=32 divisions=32), T-COMP-SCENE-001-05 (hidden when gridVisible=false)"
+    },
+    {
+      "name": "E2E Playwright test",
+      "path": "frontend/tests/e2e/scene001.spec.ts",
+      "type": "test",
+      "description": "Playwright E2E test: T-E2E-SCENE-001-01 (full scene renders with visible ground grid at >=60 FPS p50 over 3-second window)"
+    },
+    {
+      "name": "Frontend test PR",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/72",
+      "type": "pr",
+      "description": "Draft PR for Gate 7 frontend test review: FR-SCENE-001 test suite"
+    }
+  ],
+  "summary": {
+    "work_completed": "Authored complete frontend test suite for FR-SCENE-001 (Render 3D scene with Three.js and visible ground grid plane). 11 test cases across 5 files: 5 Vitest unit tests, 5 Vitest component tests, 1 Playwright E2E test.",
+    "key_findings": [
+      "LLD at docs/features/FR-SCENE-001/LOW_LEVEL_DESIGN.md (PR #40) specifies SceneViewport + GroundGrid components with cameraStore and sceneStore",
+      "Test IDs from issue #8: T-BE-SCENE-001-01, T-BE-SCENE-001-02, T-E2E-SCENE-001-01 — all covered",
+      "Unit tests use Vitest with jsdom; component tests mock @react-three/fiber Canvas",
+      "E2E test uses Playwright RAF-based FPS sampler with 60-frame warmup discard",
+      "FPS threshold is configurable via PLAYWRIGHT_FPS_THRESHOLD env var for CI (default 30 for SwiftShader)"
+    ],
+    "metrics": {
+      "test_files": 5,
+      "test_cases": 11,
+      "unit_tests": 5,
+      "component_tests": 5,
+      "e2e_tests": 1,
+      "fr_coverage": ["FR-SCENE-001"]
+    }
+  },
+  "human_review_required": [
+    {
+      "item": "Design PR #40 (FR-SCENE-001 LLD) is still a Draft — must be approved and merged before coding agent implements",
+      "reason": "Tests are written against the LLD contract; implementation must match the LLD",
+      "severity": "high"
+    },
+    {
+      "item": "FPS threshold in E2E test defaults to 30 FPS for CI (SwiftShader). Confirm if 60 FPS should be enforced in CI or only on real hardware.",
+      "reason": "CI runners use software rendering which cannot sustain 60 FPS",
+      "severity": "medium"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read the approved LLD at docs/features/FR-SCENE-001/LOW_LEVEL_DESIGN.md before implementing",
+      "Implement SceneViewport.tsx, GroundGrid.tsx, SceneErrorBoundary.tsx per LLD Section 2",
+      "Implement cameraStore.ts and sceneStore.ts per LLD Sections 3-4",
+      "Implement SceneErrors.ts (SceneInitError class) per LLD Section 3.3",
+      "Run vitest to verify all unit and component tests pass",
+      "Run playwright to verify T-E2E-SCENE-001-01 passes",
+      "Reuse branch feature/8-fr-scene-001-frontend-tests (do not create a new branch)"
+    ],
+    "files_to_read": [
+      "docs/features/FR-SCENE-001/LOW_LEVEL_DESIGN.md",
+      "frontend/tests/unit/sceneStore.test.ts",
+      "frontend/tests/unit/cameraStore.test.ts",
+      "frontend/tests/component/ViewportCanvas.test.tsx",
+      "frontend/tests/component/GroundGrid.test.tsx",
+      "frontend/tests/e2e/scene001.spec.ts",
+      "frontend/src/stores/sceneStore.ts",
+      "frontend/src/stores/cameraStore.ts",
+      "frontend/src/components/viewport/Viewport.tsx"
+    ]
+  },
+  "workflow_state": {
+    "workflow_type": "greenfield",
+    "current_phase": "implementation",
+    "completed_phases": ["entry", "research", "architecture", "planning", "design", "frontend-test"],
+    "remaining_phases": ["frontend-coding", "review", "evaluation", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-020"],
+    "forward_pass_score": 0.93,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
