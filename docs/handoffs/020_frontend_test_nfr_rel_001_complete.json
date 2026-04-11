@@ -1,0 +1,168 @@
+{
+  "handoff_id": "020_frontend_test_nfr_rel_001_complete",
+  "from_agent": "frontend-test",
+  "to_agent": "frontend-coding",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "app_id": "app-legobuilder-20260410",
+  "timestamp": "2026-04-11T06:56:13+00:00",
+  "status": "complete",
+  "summary": "Frontend-test agent authored all 10 test cases for NFR-REL-001 (Auto-Save Crash Durability) as specified in LLD Section 12. Tests are intentionally RED (failing) until the coding agent implements the production code. Branch: feature/35-nfr-rel-001-tests. PR #75 opened for Gate 7 review.",
+  "event": {
+    "event_id": "evt-020-frontend-test-nfr-rel-001",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "wf-app-legobuilder-20260410-nfr-rel-001",
+    "causation_id": "evt-006-design-complete"
+  },
+  "state_ref": {
+    "request_id": "req-nfr-rel-001-frontend-test",
+    "workflow_state_uri": "docs/handoffs/020_frontend_test_nfr_rel_001_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "pure_greenfield",
+    "path": "sreenivasmrpivot/legobuilder"
+  },
+  "workflow_state": {
+    "current_phase": "test_authoring_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["research", "pm", "architecture", "design", "frontend_test"],
+    "remaining_phases": ["frontend_coding", "review", "release"]
+  },
+  "artifacts": [
+    {
+      "name": "E2E Crash Recovery Tests",
+      "path": "frontend/tests/e2e/crashRecovery.spec.ts",
+      "type": "test-e2e",
+      "description": "Playwright E2E tests: T-BE-REL-001-01 (crash recovery, 50 bricks), T-BE-REL-001-02 (graceful close recovery), T-BE-REL-001-01b (discard path)"
+    },
+    {
+      "name": "persistenceService Unit Tests",
+      "path": "frontend/src/services/persistenceService.test.ts",
+      "type": "test-unit",
+      "description": "Unit tests: T-UNIT-REL-001-01 (atomic transaction), T-UNIT-REL-001-04 (closeSession), T-UNIT-REL-001-07 (quota exceeded purge-and-retry)"
+    },
+    {
+      "name": "crashRecoveryService Unit Tests",
+      "path": "frontend/src/services/crashRecoveryService.test.ts",
+      "type": "test-unit",
+      "description": "Unit tests: T-UNIT-REL-001-02 (detectCrash null), T-UNIT-REL-001-03 (detectCrash candidate), T-UNIT-REL-001-08 (corrupted data graceful discard)"
+    },
+    {
+      "name": "ResumePrompt Component Tests",
+      "path": "frontend/src/components/ResumePrompt/ResumePrompt.test.tsx",
+      "type": "test-unit",
+      "description": "Unit tests: T-UNIT-REL-001-05 (renders with correct brick count, accessibility, callbacks)"
+    },
+    {
+      "name": "useAutoSave Hook Tests",
+      "path": "frontend/src/hooks/useAutoSave.test.ts",
+      "type": "test-unit",
+      "description": "Unit tests: T-UNIT-REL-001-06 (beforeunload listener, interval, cleanup, overlap guard)"
+    },
+    {
+      "name": "IndexedDB Schema Types",
+      "path": "frontend/src/services/dbSchema.ts",
+      "type": "type-definition",
+      "description": "TypeScript interfaces for SceneSnapshot, AutoSaveMeta, BrickRecord, CameraState, SceneMetadata — single source of truth for IDB data shapes"
+    },
+    {
+      "name": "crashRecoveryService Interface Stub",
+      "path": "frontend/src/services/crashRecoveryService.ts",
+      "type": "interface-stub",
+      "description": "CrashRecoveryService interface + NOT-YET-IMPLEMENTED stub. Coding agent replaces stub with real implementation."
+    },
+    {
+      "name": "Test PR #75",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/75",
+      "type": "pull-request",
+      "description": "Draft PR on branch feature/35-nfr-rel-001-tests — awaiting Gate 7 test review before coding agent begins"
+    },
+    {
+      "name": "Handoff JSON",
+      "path": "docs/handoffs/020_frontend_test_nfr_rel_001_complete.json",
+      "type": "handoff-json",
+      "description": "Machine-readable handoff artifact for frontend-coding agent"
+    },
+    {
+      "name": "Handoff Markdown",
+      "path": "docs/handoffs/020_frontend_test_nfr_rel_001_HANDOFF.md",
+      "type": "handoff-markdown",
+      "description": "Human-readable handoff summary"
+    }
+  ],
+  "summary": {
+    "work_completed": "Authored 10 test cases for NFR-REL-001 (Auto-Save Crash Durability): 2 E2E Playwright + 8 Vitest unit tests. Scaffolded dbSchema.ts (IDB type definitions) and crashRecoveryService.ts (interface + stub). All tests are RED until coding agent implements production code.",
+    "key_findings": [
+      "LLD Section 7 (Transaction Atomicity Contract) is the critical implementation rule — both stores must be written in a single readwrite transaction",
+      "E2E tests use browser.close({ runBeforeUnload: false }) to simulate a crash (skips beforeunload)",
+      "All E2E selectors use data-testid attributes — coding agent must add these to production components",
+      "fake-indexeddb/auto is used for unit tests — must be in devDependencies",
+      "@testing-library/user-event is required for ResumePrompt tests"
+    ],
+    "metrics": {
+      "test_files": 5,
+      "test_cases": 10,
+      "e2e_tests": 3,
+      "unit_tests": 7,
+      "scaffold_files": 2
+    }
+  },
+  "human_review_required": [
+    {
+      "item": "Gate 7 Test Review — PR #75",
+      "reason": "Tests define the acceptance contract for NFR-REL-001; must be approved before coding begins",
+      "severity": "high"
+    },
+    {
+      "item": "Design PR #48 must merge first",
+      "reason": "Coding agent needs the merged LLD on main before implementing",
+      "severity": "high"
+    },
+    {
+      "item": "E2E data-testid selectors",
+      "reason": "Coding agent must add data-testid attributes to production components (scene-canvas, brick-palette-item, scene-brick, resume-prompt, auto-save-indicator)",
+      "severity": "medium"
+    },
+    {
+      "item": "E2E crash simulation approach",
+      "reason": "Verify browser.close({ runBeforeUnload: false }) works in CI headless Chromium for IndexedDB persistence across browser instances",
+      "severity": "medium"
+    },
+    {
+      "item": "T-BE-REL-001-02 graceful close assumption",
+      "reason": "If product decides no prompt after graceful close (only after crash), update this test to assert prompt is NOT shown",
+      "severity": "low"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read the LLD at docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md (on branch feature/35-nfr-rel-001-design or after PR #48 merges to main)",
+      "Implement frontend/src/services/dbSchema.ts (already scaffolded — verify types match LLD Section 3.1)",
+      "Implement frontend/src/services/persistenceService.ts — full idb-based implementation per LLD Sections 4.2 and 7 (single atomic transaction)",
+      "Implement frontend/src/services/crashRecoveryService.ts — replace NOT-YET-IMPLEMENTED stub per LLD Section 4.3",
+      "Implement frontend/src/stores/persistenceStore.ts — Zustand store per LLD Section 3.2",
+      "Implement frontend/src/hooks/useAutoSave.ts — per LLD Section 4.4 (5s interval, beforeunload, overlap guard)",
+      "Implement frontend/src/hooks/useRecoveryCheck.ts — boot-time recovery check hook",
+      "Implement frontend/src/components/ResumePrompt/ResumePrompt.tsx — per LLD Section 4.5 with all data-testid attributes",
+      "Add data-testid attributes: scene-canvas, brick-palette-item, scene-brick, resume-prompt, resume-prompt-brick-count, resume-prompt-resume-btn, resume-prompt-discard-btn, auto-save-indicator",
+      "Run all tests: npx vitest run (unit) and npx playwright test frontend/tests/e2e/crashRecovery.spec.ts (E2E) — all 10 tests must pass GREEN"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
+      "frontend/tests/e2e/crashRecovery.spec.ts",
+      "frontend/src/services/persistenceService.test.ts",
+      "frontend/src/services/crashRecoveryService.test.ts",
+      "frontend/src/components/ResumePrompt/ResumePrompt.test.tsx",
+      "frontend/src/hooks/useAutoSave.test.ts",
+      "frontend/src/services/dbSchema.ts",
+      "frontend/src/services/crashRecoveryService.ts"
+    ]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-035-FE-TEST"],
+    "forward_pass_score": 0.95,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
