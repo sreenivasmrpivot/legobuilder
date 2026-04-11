@@ -1,0 +1,97 @@
+{
+  "handoff_id": "007_frontend_test_complete",
+  "from_agent": "frontend-test",
+  "to_agent": "frontend-coding",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "app_id": "app-legobuilder-20260410",
+  "timestamp": "2026-04-11T06:08:28+00:00",
+  "status": "complete",
+  "summary": "Frontend-test agent wrote all 10 test cases for NFR-REL-001 (Auto-Save Crash Durability) as specified in LLD Section 12. Tests are intentionally RED (failing) until the coding agent implements the production code. Branch: feature/35-nfr-rel-001-tests. PR #49 opened for Gate 7 review.",
+  "workflow_state": {
+    "current_phase": "test_authoring_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design", "frontend_test"],
+    "remaining_phases": ["frontend_coding", "review", "release"]
+  },
+  "artifacts": [
+    {
+      "name": "E2E Crash Recovery Tests",
+      "path": "frontend/tests/e2e/crashRecovery.spec.ts",
+      "type": "test-e2e",
+      "description": "Playwright E2E tests: T-BE-REL-001-01 (crash recovery, 50 bricks), T-BE-REL-001-02 (graceful close recovery), T-BE-REL-001-01b (discard path)"
+    },
+    {
+      "name": "persistenceService Unit Tests",
+      "path": "frontend/src/services/persistenceService.test.ts",
+      "type": "test-unit",
+      "description": "Unit tests: T-UNIT-REL-001-01 (atomic transaction), T-UNIT-REL-001-04 (closeSession), T-UNIT-REL-001-07 (quota exceeded purge-and-retry)"
+    },
+    {
+      "name": "crashRecoveryService Unit Tests",
+      "path": "frontend/src/services/crashRecoveryService.test.ts",
+      "type": "test-unit",
+      "description": "Unit tests: T-UNIT-REL-001-02 (detectCrash null), T-UNIT-REL-001-03 (detectCrash candidate), T-UNIT-REL-001-08 (corrupted data graceful discard)"
+    },
+    {
+      "name": "ResumePrompt Component Tests",
+      "path": "frontend/src/components/ResumePrompt/ResumePrompt.test.tsx",
+      "type": "test-unit",
+      "description": "Unit tests: T-UNIT-REL-001-05 (renders with correct brick count, accessibility, callbacks)"
+    },
+    {
+      "name": "useAutoSave Hook Tests",
+      "path": "frontend/src/hooks/useAutoSave.test.ts",
+      "type": "test-unit",
+      "description": "Unit tests: T-UNIT-REL-001-06 (beforeunload listener, interval, cleanup, overlap guard)"
+    },
+    {
+      "name": "IndexedDB Schema Types",
+      "path": "frontend/src/services/dbSchema.ts",
+      "type": "type-definition",
+      "description": "TypeScript interfaces for SceneSnapshot, AutoSaveMeta, BrickRecord, CameraState, SceneMetadata — single source of truth for IDB data shapes"
+    },
+    {
+      "name": "crashRecoveryService Interface Stub",
+      "path": "frontend/src/services/crashRecoveryService.ts",
+      "type": "interface-stub",
+      "description": "CrashRecoveryService interface + NOT-YET-IMPLEMENTED stub. Coding agent replaces stub with real implementation."
+    },
+    {
+      "name": "Test PR #49",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/49",
+      "type": "pull-request",
+      "description": "Draft PR on branch feature/35-nfr-rel-001-tests — awaiting Gate 7 test review before coding agent begins"
+    }
+  ],
+  "human_review_required": [
+    "[HIGH] Gate 7 Test Review — PR #49 must be reviewed and approved before the coding agent begins implementation. Tests define the acceptance contract for NFR-REL-001.",
+    "[HIGH] Design PR #48 (feature/35-nfr-rel-001-design) must be merged to main before the coding agent can implement against the LLD. Ensure Gate 6a is approved first.",
+    "[MEDIUM] The E2E tests use data-testid selectors (e.g. scene-brick, brick-palette-item, scene-canvas) that must be added to the production components by the coding agent.",
+    "[MEDIUM] The E2E crash simulation uses browser.close({ runBeforeUnload: false }) — verify this correctly simulates a crash in the CI Playwright environment (headless Chromium).",
+    "[LOW] T-BE-REL-001-02 (graceful close) assumes the app shows a ResumePrompt after graceful close. If product decision changes (no prompt after graceful close), update this test."
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read the LLD at docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md (on branch feature/35-nfr-rel-001-design or after PR #48 merges to main)",
+      "Implement frontend/src/services/dbSchema.ts (already scaffolded by test agent — verify types match LLD Section 3.1)",
+      "Implement frontend/src/services/persistenceService.ts — replace the existing stub with the full idb-based implementation per LLD Section 4.2 and Section 7",
+      "Implement frontend/src/services/crashRecoveryService.ts — replace the NOT-YET-IMPLEMENTED stub with real logic per LLD Section 4.3",
+      "Implement frontend/src/stores/persistenceStore.ts — Zustand store per LLD Section 3.2",
+      "Implement frontend/src/hooks/useAutoSave.ts — per LLD Section 4.4",
+      "Implement frontend/src/hooks/useRecoveryCheck.ts — boot-time recovery check hook",
+      "Implement frontend/src/components/ResumePrompt/ResumePrompt.tsx — per LLD Section 4.5 with all data-testid attributes",
+      "Add data-testid attributes to scene canvas, brick palette, and scene brick elements for E2E test selectors",
+      "Run all tests: npx vitest run (unit) and npx playwright test frontend/tests/e2e/crashRecovery.spec.ts (E2E) — all 10 tests must pass GREEN"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
+      "frontend/tests/e2e/crashRecovery.spec.ts",
+      "frontend/src/services/persistenceService.test.ts",
+      "frontend/src/services/crashRecoveryService.test.ts",
+      "frontend/src/components/ResumePrompt/ResumePrompt.test.tsx",
+      "frontend/src/hooks/useAutoSave.test.ts",
+      "frontend/src/services/dbSchema.ts",
+      "frontend/src/services/crashRecoveryService.ts"
+    ]
+  }
+}
