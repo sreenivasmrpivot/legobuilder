@@ -1,0 +1,125 @@
+{
+  "handoff_id": "010_frontend_coding_complete",
+  "from_agent": "frontend-coding",
+  "to_agent": "frontend-review",
+  "timestamp": "2026-04-11T14:39:00Z",
+  "status": "complete",
+  "app_id": "app-legobuilder-20260410",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "summary": "Frontend Coding Agent completed fix cycle for Gate 8 review findings on PR #77 (NFR-REL-001 Auto-Save Crash Durability). All 5 findings addressed: B1 — useAutoSave.ts now reads actual scene state from sceneStore via useSceneStore.getState() instead of hardcoded empty data; B2 — package.json reverted to main branch baseline with only idb, fake-indexeddb, and globals added; M1 — ResumePrompt.test.tsx and useAutoSave.test.ts updated to import real production modules; M2 — persistenceService.ts catch block now logs warning; M3 — all 4 empty catch blocks in persistenceStore.ts now log warnings. Commit dbd64c0 pushed to branch feature/18-nfr-rel-001-frontend-tests.",
+  "workflow_state": {
+    "current_phase": "frontend_coding_fix_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design", "frontend_test", "frontend_coding", "frontend_review", "frontend_coding_fix"],
+    "remaining_phases": ["frontend_review_recheck", "release"]
+  },
+  "review_fixes": {
+    "blocking_fixed": [
+      {
+        "id": "B1",
+        "file": "frontend/src/hooks/useAutoSave.ts",
+        "fix": "Now imports useSceneStore and calls useSceneStore.getState() inside interval callback to read actual bricks, cameraState, and sceneMetadata"
+      },
+      {
+        "id": "B2",
+        "file": "frontend/package.json",
+        "fix": "Reverted to main branch baseline. Package name restored to legobuilder. All original deps preserved (immer, three-mesh-bvh, @vitest/coverage-v8, zustand v4, vite v5). Only additions: idb, fake-indexeddb, globals."
+      }
+    ],
+    "medium_fixed": [
+      {
+        "id": "M1",
+        "files": ["frontend/tests/component/ResumePrompt.test.tsx", "frontend/tests/unit/useAutoSave.test.ts"],
+        "fix": "Updated to import real production modules. Added sceneStore mock and new test verifying actual scene data is passed."
+      },
+      {
+        "id": "M2",
+        "file": "frontend/src/services/persistenceService.ts",
+        "fix": "Added console.warn('[persistenceService] Could not read existing meta:', err) to catch block"
+      },
+      {
+        "id": "M3",
+        "file": "frontend/src/stores/persistenceStore.ts",
+        "fix": "Added console.warn with error details to all 4 empty catch blocks (markSessionClosed, checkForCrashRecovery, resumeSession, discardSession)"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "name": "useAutoSave.ts (fixed)",
+      "path": "frontend/src/hooks/useAutoSave.ts",
+      "type": "source",
+      "description": "B1 fix: reads actual scene state from sceneStore"
+    },
+    {
+      "name": "package.json (fixed)",
+      "path": "frontend/package.json",
+      "type": "config",
+      "description": "B2 fix: reverted to main baseline, only added idb/fake-indexeddb/globals"
+    },
+    {
+      "name": "persistenceService.ts (fixed)",
+      "path": "frontend/src/services/persistenceService.ts",
+      "type": "source",
+      "description": "M2 fix: console.warn in catch block"
+    },
+    {
+      "name": "persistenceStore.ts (fixed)",
+      "path": "frontend/src/stores/persistenceStore.ts",
+      "type": "source",
+      "description": "M3 fix: console.warn in all 4 catch blocks"
+    },
+    {
+      "name": "ResumePrompt.test.tsx (fixed)",
+      "path": "frontend/tests/component/ResumePrompt.test.tsx",
+      "type": "test-file",
+      "description": "M1 fix: imports real production ResumePrompt component"
+    },
+    {
+      "name": "useAutoSave.test.ts (fixed)",
+      "path": "frontend/tests/unit/useAutoSave.test.ts",
+      "type": "test-file",
+      "description": "M1 fix: imports real production useAutoSave hook, adds sceneStore mock and scene data verification test"
+    }
+  ],
+  "human_review_required": [
+    {
+      "item": "Gate 8 re-review: Verify B1 fix — useAutoSave reads actual scene state",
+      "severity": "high"
+    },
+    {
+      "item": "Gate 8 re-review: Verify B2 fix — package.json matches main baseline + new deps only",
+      "severity": "high"
+    },
+    {
+      "item": "Verify test imports use real production modules (M1)",
+      "severity": "medium"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Re-review PR #77 focusing on the 5 fixed findings",
+      "Verify useAutoSave.ts reads from sceneStore (B1 fix)",
+      "Verify package.json matches main baseline with only idb/fake-indexeddb/globals added (B2 fix)",
+      "Verify ResumePrompt.test.tsx and useAutoSave.test.ts import real production modules (M1 fix)",
+      "Verify console.warn in persistenceService.ts and persistenceStore.ts (M2/M3 fixes)",
+      "Run unit tests: npx vitest run frontend/tests/unit",
+      "Run component tests: npx vitest run frontend/tests/component"
+    ],
+    "files_to_read": [
+      "frontend/src/hooks/useAutoSave.ts",
+      "frontend/package.json",
+      "frontend/src/services/persistenceService.ts",
+      "frontend/src/stores/persistenceStore.ts",
+      "frontend/tests/component/ResumePrompt.test.tsx",
+      "frontend/tests/unit/useAutoSave.test.ts"
+    ]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-012"],
+    "forward_pass_score": 0.95,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
