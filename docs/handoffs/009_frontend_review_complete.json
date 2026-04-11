@@ -1,118 +1,113 @@
 {
   "handoff_id": "009_frontend_review_complete",
   "from_agent": "frontend-review",
-  "to_agent": "human-review",
-  "timestamp": "2026-04-11T07:34:51Z",
-  "status": "complete",
+  "to_agent": "frontend-coding",
+  "timestamp": "2026-04-11T07:35:12Z",
+  "status": "changes_requested",
   "app_id": "app-legobuilder-20260410",
   "target_repo": "sreenivasmrpivot/legobuilder",
-  "summary": "Frontend Review Agent completed Gate 8 review of PR #77 (NFR-REL-001 Auto-Save Crash Durability). Verdict: APPROVE with non-blocking comments. All 10 test IDs from LLD Section 12 are satisfied. Code is well-structured, type-safe, and LLD-compliant. idb library correctly used per LLD Section 13. Atomic dual-store transactions verified. Accessible ResumePrompt modal with proper ARIA attributes. 2 medium issues (useAutoSave hardcoded placeholders for bricks/camera — known integration gap), 3 low issues (package.json out-of-scope changes, raw IDBKeyRange usage, inline test component). No blocking defects found.",
+  "issue_number": 18,
+  "pr_number": 77,
+  "summary": "Frontend review of PR #77 (NFR-REL-001 Auto-Save Crash Durability) completed with REQUEST CHANGES verdict. 2 high-severity blocking issues found: (1) useAutoSave.ts passes hardcoded empty bricks array instead of reading from sceneStore — auto-save never persists actual user work; (2) package.json has unscoped breaking changes including removed dependencies (immer, three-mesh-bvh, @vitest/coverage-v8), major version bumps (zustand v4→v5, vite v5→v6), removed scripts, and package name change. 3 medium issues: tests use inline stubs instead of production imports, purgeSession uses raw IDBKeyRange, saveSnapshot has TOCTOU race on saveCount. Architecture, type safety, error handling, accessibility, and LLD compliance are all excellent. All 10 test IDs from LLD Section 12 are covered.",
   "workflow_state": {
     "current_phase": "frontend_review_complete",
     "workflow_type": "pure_greenfield",
     "completed_phases": ["design", "frontend_test", "frontend_coding", "frontend_review"],
-    "remaining_phases": ["human_review", "release"]
+    "remaining_phases": ["frontend_coding_fix", "frontend_review_recheck", "release"]
   },
-  "review_verdict": {
-    "decision": "APPROVE",
-    "blocking_issues": 0,
-    "non_blocking_issues": 5,
-    "issues": [
-      {
-        "id": "M1",
-        "severity": "medium",
-        "file": "frontend/src/hooks/useAutoSave.ts",
-        "line": 44,
-        "description": "triggerAutoSave called with hardcoded empty bricks array — known integration placeholder"
-      },
-      {
-        "id": "M2",
-        "severity": "medium",
-        "file": "frontend/src/hooks/useAutoSave.ts",
-        "line": 45,
-        "description": "Hardcoded camera state and metadata — known integration placeholder"
-      },
-      {
-        "id": "L1",
-        "severity": "low",
-        "file": "frontend/package.json",
-        "description": "Out-of-scope changes: removed scripts, dependencies, name change, major version bumps"
-      },
-      {
-        "id": "L2",
-        "severity": "low",
-        "file": "frontend/src/services/persistenceService.ts",
-        "line": 195,
-        "description": "Raw IDBKeyRange.only() usage instead of idb cursor API — minor inconsistency"
-      },
-      {
-        "id": "L3",
-        "severity": "low",
-        "file": "frontend/tests/component/ResumePrompt.test.tsx",
-        "description": "Component test uses inline stub instead of importing production component"
-      }
-    ]
-  },
-  "checklist": {
-    "idb_library_used": true,
-    "atomic_dual_store_transaction": true,
-    "persistence_error_class": true,
-    "snapshot_validation": true,
-    "quota_exceeded_handling": true,
-    "close_session_marks_closed": true,
-    "detect_crash_correct": true,
-    "corrupted_sessions_purged": true,
-    "beforeunload_listener": true,
-    "overlap_guard": true,
-    "accessibility_compliant": true,
-    "data_testid_aligned": true,
-    "fake_indexeddb_in_devdeps": true,
-    "all_10_test_ids_covered": true
-  },
-  "artifacts": [
+  "review_verdict": "REQUEST_CHANGES",
+  "blocking_issues": [
     {
-      "type": "review",
-      "path": "PR #77 review comment",
-      "description": "Full review with checklist, issues, and code quality ratings"
+      "id": "B1",
+      "severity": "high",
+      "file": "frontend/src/hooks/useAutoSave.ts",
+      "lines": "38-42",
+      "title": "Hardcoded empty bricks array — auto-save never persists actual user work",
+      "description": "triggerAutoSave([], ...) always saves 0 bricks. The hook must read actual scene state from sceneStore.getState() at save time.",
+      "fix": "Use useSceneStore.getState() inside the interval callback to read current bricks, camera, and metadata"
     },
     {
-      "type": "review",
-      "path": "PR #77 inline comments",
-      "description": "3 inline review comments on useAutoSave.ts, package.json, persistenceService.ts"
-    },
-    {
-      "type": "handoff",
-      "path": "docs/handoffs/009_frontend_review_complete.json",
-      "description": "Machine-readable handoff"
-    },
-    {
-      "type": "handoff",
-      "path": "docs/handoffs/009_frontend_review_HANDOFF.md",
-      "description": "Human-readable handoff"
+      "id": "B2",
+      "severity": "high",
+      "file": "frontend/package.json",
+      "title": "Unscoped breaking changes to package.json",
+      "description": "Removed immer, three-mesh-bvh, @vitest/coverage-v8. Major bumps: zustand v4→v5, vite v5→v6. Removed scripts: lint:fix, format, format:check, type-check, test:e2e:ui. Package name changed.",
+      "fix": "Revert all changes except adding idb to dependencies and fake-indexeddb + globals to devDependencies"
     }
   ],
+  "medium_issues": [
+    {
+      "id": "M1",
+      "severity": "medium",
+      "title": "Tests use inline stubs instead of production imports",
+      "description": "All 4 test files define inline implementations rather than importing from ../../src/... Now that production code exists, tests should import real modules."
+    },
+    {
+      "id": "M2",
+      "severity": "medium",
+      "file": "frontend/src/services/persistenceService.ts",
+      "title": "purgeSession() uses raw IDBKeyRange.only() instead of idb wrapper",
+      "description": "Inconsistent with rest of codebase. Should use getAllFromIndex pattern like purgeOldSnapshots()."
+    },
+    {
+      "id": "M3",
+      "severity": "low",
+      "file": "frontend/src/services/persistenceService.ts",
+      "title": "saveSnapshot() TOCTOU race on saveCount",
+      "description": "existingMeta read happens outside the atomic transaction. Mitigated by overlap guards."
+    }
+  ],
+  "positive_findings": [
+    "Excellent module architecture with clean separation of concerns",
+    "Full idb library usage per LLD Section 13",
+    "Atomic dual-store transactions in saveSnapshot()",
+    "Robust snapshot validation in isValidSnapshot()",
+    "WCAG-compliant ResumePrompt with proper ARIA attributes",
+    "All 7 data-testid attributes match E2E selectors",
+    "PersistenceError class with typed error codes",
+    "Quota exceeded purge-and-retry pattern",
+    "All 10 test IDs from LLD Section 12 covered"
+  ],
+  "test_id_coverage": {
+    "T-BE-REL-001-01": "present",
+    "T-BE-REL-001-02": "present",
+    "T-UNIT-REL-001-01": "present",
+    "T-UNIT-REL-001-02": "present",
+    "T-UNIT-REL-001-03": "present",
+    "T-UNIT-REL-001-04": "present",
+    "T-UNIT-REL-001-05": "present",
+    "T-UNIT-REL-001-06": "present",
+    "T-UNIT-REL-001-07": "present",
+    "T-UNIT-REL-001-08": "present"
+  },
   "human_review_required": [
     {
-      "item": "Gate 8 Human Review: Approve PR #77",
-      "reason": "Agent review is APPROVE but human must confirm before merge",
+      "item": "Gate 8 — Human review of blocking issues",
+      "reason": "Two high-severity issues require coding agent fixes before merge",
       "severity": "high"
     },
     {
-      "item": "Verify package.json out-of-scope changes",
-      "reason": "Removed dependencies (immer, three-mesh-bvh), major version bumps (zustand 5, vite 6), name change",
-      "severity": "medium"
-    },
-    {
-      "item": "Confirm useAutoSave integration plan",
-      "reason": "Hook currently passes empty bricks — needs wiring to sceneStore in a follow-up",
+      "item": "Verify package.json revert scope",
+      "reason": "Human should confirm which dependency changes are intentional vs accidental",
       "severity": "medium"
     }
   ],
-  "alignment": {
-    "tcu_ids": ["TCU-012"],
-    "forward_pass_score": 0.94,
-    "backward_pass_score": null,
-    "human_score": null,
-    "convergence_score": null
+  "next_agent_context": {
+    "recommended_actions": [
+      "Fix useAutoSave.ts to read actual scene state from sceneStore",
+      "Revert package.json to only add idb and fake-indexeddb",
+      "Update test files to import real production modules",
+      "Address purgeSession() IDBKeyRange inconsistency",
+      "Re-request review after fixes"
+    ],
+    "files_to_modify": [
+      "frontend/src/hooks/useAutoSave.ts",
+      "frontend/package.json",
+      "frontend/tests/component/ResumePrompt.test.tsx",
+      "frontend/tests/unit/crashRecoveryService.test.ts",
+      "frontend/tests/unit/persistenceService.test.ts",
+      "frontend/tests/unit/useAutoSave.test.ts",
+      "frontend/src/services/persistenceService.ts"
+    ]
   }
 }

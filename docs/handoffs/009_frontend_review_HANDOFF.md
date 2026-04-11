@@ -1,90 +1,74 @@
-# Handoff: Frontend Review → Human Review
+# Handoff: Frontend Review → Frontend Coding (Fix Cycle)
 
 **Handoff ID:** 009_frontend_review_complete
 **Date:** 2026-04-11
-**Status:** complete
+**Status:** changes_requested
 **App ID:** app-legobuilder-20260410
 **Target Repo:** sreenivasmrpivot/legobuilder
 
 ---
 
-## Review Completed
+## Review Verdict: ❌ REQUEST CHANGES
 
-Frontend Review Agent completed **Gate 8** review of PR #77 for **NFR-REL-001 — Auto-Save Crash Durability**.
-
-**Verdict:** ✅ **APPROVE** with non-blocking comments
+Frontend review of PR #77 (NFR-REL-001 Auto-Save Crash Durability) found **2 high-severity blocking issues** that must be resolved before merge.
 
 **Branch:** `feature/18-nfr-rel-001-frontend-tests`
 **PR:** #77
 
 ---
 
-## Review Summary
+## 🔴 Blocking Issues
 
-The implementation is well-structured, type-safe, and LLD-compliant. All 10 test IDs from LLD Section 12 are satisfied. The code demonstrates strong patterns for:
+### B1: `useAutoSave.ts` — Hardcoded empty bricks array
+- **File:** `frontend/src/hooks/useAutoSave.ts` (lines 38-42)
+- **Problem:** `triggerAutoSave([], ...)` always saves 0 bricks. Auto-save never persists actual user work.
+- **Fix:** Use `useSceneStore.getState()` inside the interval callback to read current bricks, camera, and metadata at save time.
 
-- **Atomic IndexedDB transactions** — `saveSnapshot()` writes both stores in a single transaction
-- **Crash recovery validation** — `isValidSnapshot()` checks bricks array and schema version
-- **Quota exceeded resilience** — Purge-and-retry with `PersistenceError` wrapping
-- **Accessible UI** — WCAG-compliant modal with `role=dialog`, `aria-modal`, `aria-labelledby`
-- **Clean architecture** — schema → service → store → hook → component separation
-
----
-
-## Issues Found
-
-| ID | Severity | File | Description |
-|----|----------|------|-------------|
-| M1 | Medium | `useAutoSave.ts:44` | Hardcoded empty bricks array — integration placeholder |
-| M2 | Medium | `useAutoSave.ts:45-46` | Hardcoded camera/metadata — integration placeholder |
-| L1 | Low | `package.json` | Out-of-scope changes: removed deps, scripts, name change, major bumps |
-| L2 | Low | `persistenceService.ts:195` | Raw `IDBKeyRange.only()` instead of `idb` cursor API |
-| L3 | Low | `ResumePrompt.test.tsx` | Tests inline stub, not production component |
-
-**Blocking issues:** 0
-**Non-blocking issues:** 5
+### B2: `package.json` — Unscoped breaking changes
+- **File:** `frontend/package.json`
+- **Problem:** Removed `immer`, `three-mesh-bvh`, `@vitest/coverage-v8`. Major bumps: `zustand` v4→v5, `vite` v5→v6. Removed scripts. Package name changed.
+- **Fix:** Revert all changes except adding `idb` to dependencies and `fake-indexeddb` + `globals` to devDependencies.
 
 ---
 
-## Human Review Required
+## 🟡 Medium Issues
 
-| Item | Reason | Severity |
-|------|--------|----------|
-| Gate 8 Human Review | Agent APPROVE — human must confirm before merge | high |
-| Verify package.json changes | Removed deps (immer, three-mesh-bvh), major bumps (zustand 5, vite 6) | medium |
-| Confirm useAutoSave integration plan | Hook passes empty bricks — needs sceneStore wiring in follow-up | medium |
-
----
-
-## Artifacts
-
-| Artifact | Path | Description |
-|----------|------|-------------|
-| PR Review | PR #77 review | Full review with checklist and ratings |
-| Inline Comments | PR #77 | 3 inline comments on specific files |
-| Handoff JSON | `docs/handoffs/009_frontend_review_complete.json` | Machine-readable handoff |
-| Handoff Markdown | `docs/handoffs/009_frontend_review_HANDOFF.md` | This file |
+| ID | Issue | File |
+|----|-------|------|
+| M1 | Tests use inline stubs instead of production imports | All 4 test files |
+| M2 | `purgeSession()` uses raw `IDBKeyRange.only()` | `persistenceService.ts` |
+| M3 | `saveSnapshot()` TOCTOU race on `saveCount` | `persistenceService.ts` |
 
 ---
 
-## Code Quality Ratings
+## 🟢 Positive Findings
 
-| Dimension | Rating |
-|-----------|--------|
-| Architecture | ⭐⭐⭐⭐⭐ |
-| Type Safety | ⭐⭐⭐⭐⭐ |
-| Error Handling | ⭐⭐⭐⭐⭐ |
-| Accessibility | ⭐⭐⭐⭐⭐ |
-| Test Coverage | ⭐⭐⭐⭐ |
-| LLD Compliance | ⭐⭐⭐⭐⭐ |
+- Excellent module architecture with clean separation of concerns
+- Full `idb` library usage per LLD Section 13
+- Atomic dual-store transactions in `saveSnapshot()`
+- Robust snapshot validation in `isValidSnapshot()`
+- WCAG-compliant ResumePrompt with proper ARIA attributes
+- All 7 `data-testid` attributes match E2E selectors
+- `PersistenceError` class with typed error codes
+- All 10 test IDs from LLD Section 12 covered
+
+---
+
+## Required Actions
+
+1. Fix `useAutoSave.ts` — read actual scene state from `sceneStore`
+2. Revert `package.json` — only add `idb` and `fake-indexeddb`
+3. Update test imports — import real production modules (recommended)
+4. Address `purgeSession()` `IDBKeyRange` inconsistency (recommended)
+5. Re-request review after fixes
 
 ---
 
 ## Workflow State
 
-- **Current phase:** frontend_review_complete
+- **Current phase:** frontend_review_complete (changes_requested)
 - **Completed:** design, frontend_test, frontend_coding, frontend_review
-- **Remaining:** human_review, release
+- **Remaining:** frontend_coding_fix, frontend_review_recheck, release
 
 ---
 
