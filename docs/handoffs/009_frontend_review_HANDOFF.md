@@ -1,4 +1,4 @@
-# Handoff: Frontend Review → Frontend Coding (Revision)
+# Handoff: Frontend Review → Frontend Coding (Fix Cycle)
 
 **Handoff ID:** 009_frontend_review_complete
 **Date:** 2026-04-11
@@ -8,102 +8,83 @@
 
 ---
 
-## Review Verdict: ❌ REQUEST CHANGES
+## Review Verdict: 🔴 CHANGES REQUESTED
 
-Frontend Review Agent (Gate 8) reviewed PR #77 for **NFR-REL-001 — Auto-Save Crash Durability**.
-
-**2 blocking issues** must be resolved before approval. **3 medium issues** should be addressed.
+Frontend review of PR #77 (NFR-REL-001 Auto-Save Crash Durability) found **1 high-severity blocking issue**, 2 medium issues, and 5 low suggestions.
 
 **Branch:** `feature/18-nfr-rel-001-frontend-tests`
 **PR:** #77
 
 ---
 
-## 🔴 Blocking Issues
+## Blocking Issues
 
-### B1. `useAutoSave.ts` passes hardcoded empty data — auto-save is a no-op
+### H1: `useAutoSave.ts` — Hardcoded empty data (HIGH)
 
-**File:** `frontend/src/hooks/useAutoSave.ts`, lines 42-46
+**File:** `frontend/src/hooks/useAutoSave.ts` lines 40-47
 
-The interval callback passes `bricks: []`, hardcoded camera state, and placeholder metadata. No actual user work is ever saved. E2E tests T-BE-REL-001-01 and T-BE-REL-001-02 will fail.
+The hook passes `bricks: []`, hardcoded camera state, and placeholder metadata to every `triggerAutoSave()` call. It never reads from sceneStore. Every auto-save persists an empty scene, defeating the entire feature.
 
-**Fix:** Read actual bricks/camera/metadata from `sceneStore` inside the hook, or accept them as parameters.
-
-### B2. `package.json` has out-of-scope breaking changes
-
-**File:** `frontend/package.json`
-
-- Removed `immer`, `three-mesh-bvh`, `@vitest/coverage-v8`
-- Bumped `zustand` 4→5 and `vite` 5→6 (major versions)
-- Removed scripts: `lint:fix`, `format`, `format:check`, `type-check`, `test:e2e:ui`
-- Renamed package from `legobuilder` to `legobuilder-frontend`
-
-**Fix:** Revert to main branch version, only add `idb` and `fake-indexeddb`.
+**Fix:** Read actual scene state from `sceneStore` using `useSceneStore` selectors.
 
 ---
 
-## 🟡 Medium Issues
+## Medium Issues
 
-### M1. Tests use inline stubs instead of importing production code
+### M1: Tests use inline implementations (MEDIUM)
 
-All 4 test files define their own implementations rather than importing the real production modules. Tests provide zero coverage of actual production code.
+`ResumePrompt.test.tsx` and `useAutoSave.test.ts` define their own inline implementations instead of importing real source. Tests validate contract but not shipped code.
 
-### M2. Empty catch block silently swallows errors
+**Fix:** Update imports to use real implementations.
 
-`persistenceService.ts:80-82` — Add `console.warn` for debuggability.
+### M2: Silent error swallowing in persistenceService.ts (MEDIUM)
 
-### M3. ResumePrompt lacks focus trap and Escape key handling
+Empty `catch {}` block at line 74 silently resets `saveCount` to 1 on any error.
 
-Missing WCAG 2.1 AA keyboard accessibility. Track as follow-up issue.
-
----
-
-## ✅ What's Good
-
-- `idb` library used correctly per LLD Section 13
-- Atomic dual-store transactions in `saveSnapshot()`
-- Validation-first crash recovery with schema version check
-- `PersistenceError` class with typed error codes
-- All `data-testid` attributes match E2E selectors
-- Accessible modal (`role=dialog`, `aria-modal`, `aria-labelledby`)
-- `beforeunload` listener with cleanup on unmount
-- Overlap guard (ref-based) prevents concurrent saves
-- Clean module separation and JSDoc documentation
+**Fix:** Add `console.warn` with error details.
 
 ---
 
-## Test ID Coverage
+## Low Suggestions
 
-| Test ID | Status |
-|---------|--------|
-| T-BE-REL-001-01 | ⚠️ Will fail (B1) |
-| T-BE-REL-001-02 | ⚠️ Will fail (B1) |
-| T-UNIT-REL-001-01 | ✅ Contract met |
-| T-UNIT-REL-001-02 | ✅ Contract met |
-| T-UNIT-REL-001-03 | ✅ Contract met |
-| T-UNIT-REL-001-04 | ✅ Contract met |
-| T-UNIT-REL-001-05 | ✅ Contract met |
-| T-UNIT-REL-001-06 | ✅ Contract met |
-| T-UNIT-REL-001-07 | ✅ Contract met |
-| T-UNIT-REL-001-08 | ✅ Contract met |
+| ID | File | Issue |
+|----|------|-------|
+| L1 | dbSchema.ts | Add `closeDB()` for HMR cleanup |
+| L2 | useAutoSave.ts | `markSessionClosed` async in sync `beforeunload` |
+| L3 | persistenceStore.ts | Empty catch blocks need `console.warn` |
+| L4 | ResumePrompt.tsx | No focus trap in modal |
+| L5 | package.json | Scope creep: breaking version bumps, removed deps |
+
+---
+
+## Passing Checks
+
+- ✅ idb library used (not raw IndexedDB)
+- ✅ Atomic dual-store transaction in saveSnapshot()
+- ✅ PersistenceError class with error codes
+- ✅ data-testid attributes match E2E selectors
+- ✅ Accessible modal (role, aria-modal, aria-labelledby)
+- ✅ beforeunload listener with cleanup
+- ✅ Overlap guard prevents concurrent saves
+- ✅ fake-indexeddb in devDependencies
+- ✅ All 10 test IDs from LLD Section 12 covered
 
 ---
 
 ## Required Actions
 
-1. **[B1] Fix `useAutoSave.ts`** — Read actual scene state from `sceneStore`
-2. **[B2] Revert `package.json`** — Only add `idb` and `fake-indexeddb`
-3. **[M1] Update test imports** — Replace inline stubs with real production module imports
-4. **[M2] Add warning log** — Replace empty catch in `persistenceService.ts:80-82`
-5. **[M3] Create follow-up issue** — Focus trap + Escape key for ResumePrompt
+1. **[H1]** Fix `useAutoSave.ts` to read actual scene state from sceneStore
+2. **[M1]** Update test imports to use real implementations
+3. **[M2]** Add error logging to silent catch in `persistenceService.ts`
+4. **[L5]** Clarify whether package.json scope changes are intentional
 
 ---
 
 ## Workflow State
 
-- **Current phase:** frontend_review_changes_requested
+- **Current phase:** frontend_review_complete (changes requested)
 - **Completed:** design, frontend_test, frontend_coding, frontend_review
-- **Remaining:** frontend_coding_revision, frontend_review_re-review, release
+- **Remaining:** frontend_coding_fix, frontend_review_recheck, release
 
 ---
 
