@@ -1,0 +1,129 @@
+{
+  "handoff_id": "030_frontend_coding_complete",
+  "from_agent": "frontend-coding",
+  "to_agent": "frontend-review",
+  "timestamp": "2026-04-11T07:27:38Z",
+  "status": "complete",
+  "event": {
+    "event_id": "evt-frontend-coding-nfr-rel-001",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "app-legobuilder-20260410",
+    "causation_id": "020_frontend_test_complete"
+  },
+  "state_ref": {
+    "request_id": "d32810a4-6d3f-4ce0-b585-db825f6093c4",
+    "workflow_state_uri": "docs/handoffs/030_frontend_coding_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "path": "sreenivasmrpivot/legobuilder"
+  },
+  "artifacts": [
+    {
+      "name": "Persistence types",
+      "path": "frontend/src/types/persistence.ts",
+      "type": "source",
+      "description": "Shared TypeScript types for IndexedDB schema, store interface, and service contracts (LLD Sections 4-7)"
+    },
+    {
+      "name": "persistenceService",
+      "path": "frontend/src/services/persistenceService.ts",
+      "type": "source",
+      "description": "IPersistenceService implementation: IndexedDB atomic writes, schema creation, pruning, crash detection, private-mode fallback"
+    },
+    {
+      "name": "crashRecoveryService",
+      "path": "frontend/src/services/crashRecoveryService.ts",
+      "type": "source",
+      "description": "ICrashRecoveryService implementation: crash detection, recovery snapshot retrieval, recovery data cleanup"
+    },
+    {
+      "name": "persistenceStore",
+      "path": "frontend/src/stores/persistenceStore.ts",
+      "type": "source",
+      "description": "Zustand store with state machine: idle/saving/saved/error for auto-save, none/pending/accepted/dismissed for recovery"
+    },
+    {
+      "name": "useAutoSave hook",
+      "path": "frontend/src/hooks/useAutoSave.ts",
+      "type": "source",
+      "description": "React hook: 30s auto-save interval, beforeunload graceful-close handler, cleanup on unmount"
+    },
+    {
+      "name": "ResumePrompt component",
+      "path": "frontend/src/components/ui/ResumePrompt.tsx",
+      "type": "source",
+      "description": "Accessible dialog: role=dialog, aria-modal, aria-labelledby, Escape key, autoFocus, Resume/Start Fresh buttons"
+    }
+  ],
+  "summary": {
+    "work_completed": "Implemented all 5 source modules for NFR-REL-001 auto-save crash durability plus shared types. Modules match the contract-driven test suite from the frontend-test agent.",
+    "key_findings": [
+      "persistenceService uses atomic IndexedDB transactions spanning both scene-snapshots and auto-save-meta stores",
+      "Snapshot pruning keeps only the 10 most recent snapshots per session (MAX_SNAPSHOTS=10)",
+      "crashRecoveryService delegates to persistenceService for all IndexedDB operations",
+      "useAutoSave hook uses setInterval for 30s saves and window.beforeunload for graceful close marking",
+      "ResumePrompt implements full ARIA dialog pattern with keyboard support"
+    ],
+    "metrics": {
+      "source_files_created": 6,
+      "interfaces_implemented": 3,
+      "test_ids_targeted": "T-BE-REL-001-01 through T-BE-REL-001-10"
+    }
+  },
+  "human_review_required": [
+    {
+      "item": "fake-indexeddb devDependency",
+      "reason": "Must run npm install --save-dev fake-indexeddb in frontend/ before unit tests can execute",
+      "severity": "high"
+    },
+    {
+      "item": "Unit test execution",
+      "reason": "Tests were written contract-first; verify all 8 unit tests pass with vitest",
+      "severity": "high"
+    },
+    {
+      "item": "E2E test execution",
+      "reason": "E2E tests require running dev server and Playwright >= 1.45; verify 2 E2E tests pass",
+      "severity": "medium"
+    },
+    {
+      "item": "data-testid attributes",
+      "reason": "E2E tests reference data-testid='brick-catalog-item', 'scene-viewport', 'scene-brick' — these must be added to real scene components",
+      "severity": "medium"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Review all 6 source files for correctness against LLD and test contracts",
+      "Verify persistenceService atomic transaction pattern",
+      "Verify ResumePrompt ARIA compliance",
+      "Check useAutoSave cleanup (interval + beforeunload listener)",
+      "Verify persistenceStore state machine transitions match test expectations"
+    ],
+    "files_to_read": [
+      "frontend/src/types/persistence.ts",
+      "frontend/src/services/persistenceService.ts",
+      "frontend/src/services/crashRecoveryService.ts",
+      "frontend/src/stores/persistenceStore.ts",
+      "frontend/src/hooks/useAutoSave.ts",
+      "frontend/src/components/ui/ResumePrompt.tsx",
+      "frontend/tests/unit/persistenceService.types.ts",
+      "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md"
+    ]
+  },
+  "workflow_state": {
+    "workflow_type": "greenfield",
+    "current_phase": "implementation",
+    "completed_phases": ["entry", "research", "planning", "architecture", "design", "frontend-test", "frontend-coding"],
+    "remaining_phases": ["review", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-035"],
+    "forward_pass_score": 0.92,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
