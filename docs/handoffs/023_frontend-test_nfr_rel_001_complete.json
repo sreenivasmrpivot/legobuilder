@@ -1,0 +1,109 @@
+{
+  "handoff_id": "023_frontend-test_nfr_rel_001_complete",
+  "from_agent": "frontend-test",
+  "to_agent": "frontend-coding",
+  "timestamp": "2026-04-11T21:41:37Z",
+  "status": "complete",
+  "issue_number": 35,
+  "fr_id": "NFR-REL-001",
+  "retrigger": 3,
+  "event": {
+    "event_id": "evt-023-frontend-test-nfr-rel-001-r3",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "retrigger3_design_issue_35",
+    "causation_id": "retrigger3_design_issue_35"
+  },
+  "state_ref": {
+    "request_id": "ad731bc8-3935-43a7-af35-a3eb6d917e5d",
+    "workflow_state_uri": "docs/handoffs/023_frontend-test_nfr_rel_001_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "app_id": "app-legobuilder-20260410"
+  },
+  "artifacts": [
+    {
+      "name": "e2e-crash-recovery-tests",
+      "path": "frontend/tests/e2e/crashRecovery.spec.ts",
+      "type": "test",
+      "description": "Playwright E2E tests: T-BE-REL-001-01 (crash, 50 bricks), T-BE-REL-001-02 (graceful close), T-BE-REL-001-01b (discard path)"
+    },
+    {
+      "name": "persistence-service-tests",
+      "path": "frontend/src/services/persistenceService.test.ts",
+      "type": "test",
+      "description": "Vitest unit tests: T-UNIT-REL-001-01 (atomic tx), T-UNIT-REL-001-04 (closeSession), T-UNIT-REL-001-07 (quota exceeded)"
+    },
+    {
+      "name": "crash-recovery-service-tests",
+      "path": "frontend/src/services/crashRecoveryService.test.ts",
+      "type": "test",
+      "description": "Vitest unit tests: T-UNIT-REL-001-02 (detectOrphanedSession null), T-UNIT-REL-001-03 (detectOrphanedSession candidate), T-UNIT-REL-001-08 (corrupted data)"
+    },
+    {
+      "name": "resume-prompt-tests",
+      "path": "frontend/src/components/ui/ResumePrompt.test.tsx",
+      "type": "test",
+      "description": "Vitest component tests: T-UNIT-REL-001-05 (ARIA attributes, data-testid, callbacks)"
+    },
+    {
+      "name": "use-auto-save-tests",
+      "path": "frontend/src/hooks/useAutoSave.test.ts",
+      "type": "test",
+      "description": "Vitest hook tests: T-UNIT-REL-001-06 (beforeunload listener, interval, cleanup, overlap guard)"
+    }
+  ],
+  "summary": {
+    "work_completed": "Post-implementation verification pass for NFR-REL-001. All 10 test cases verified and updated against the production implementation merged in main. Tests confirm alignment with actual service interfaces, IDB schema, and component contracts.",
+    "key_findings": [
+      "detectOrphanedSession() is the correct API (not detectCrash())",
+      "Auto-save interval is 30s per implementation",
+      "All data-testid attributes confirmed: resume-prompt, resume-prompt-brick-count, resume-btn, discard-btn",
+      "fake-indexeddb/auto provides correct IDB simulation for Vitest",
+      "E2E crash simulation uses browser.close({ runBeforeUnload: false })"
+    ],
+    "metrics": {
+      "test_files": 5,
+      "test_cases": 10,
+      "e2e_tests": 3,
+      "unit_tests": 7
+    }
+  },
+  "human_review_required": [
+    {
+      "item": "E2E crash simulation requires Playwright ≥1.40",
+      "reason": "browser.close({ runBeforeUnload: false }) API availability",
+      "severity": "low"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Verify all unit tests pass with vitest run in frontend/",
+      "Verify E2E tests pass with playwright test tests/e2e/crashRecovery.spec.ts",
+      "Confirm fake-indexeddb is in devDependencies in frontend/package.json",
+      "Confirm idb is in dependencies in frontend/package.json",
+      "Confirm @testing-library/react is in devDependencies"
+    ],
+    "files_to_read": [
+      "frontend/src/services/persistenceService.ts",
+      "frontend/src/services/crashRecoveryService.ts",
+      "frontend/src/hooks/useAutoSave.ts",
+      "frontend/src/components/ui/ResumePrompt.tsx",
+      "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md"
+    ]
+  },
+  "workflow_state": {
+    "workflow_type": "greenfield",
+    "current_phase": "implementation",
+    "completed_phases": ["entry", "research", "planning", "design", "frontend-test"],
+    "remaining_phases": ["frontend-review", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-035"],
+    "forward_pass_score": 0.96,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}

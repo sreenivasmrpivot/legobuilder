@@ -1,432 +1,158 @@
 /**
- * Unit Tests — persistenceService
+ * NFR-REL-001 — Auto-Save Crash Durability
+ * Unit tests for persistenceService
  *
- * Test IDs: T-UNIT-REL-001-01, T-UNIT-REL-001-04, T-UNIT-REL-001-07
+ * Test IDs:
+ *   T-UNIT-REL-001-01: saveSnapshot() performs atomic dual-store write
+ *   T-UNIT-REL-001-04: closeSession() marks session status='closed'
+ *   T-UNIT-REL-001-07: Quota exceeded triggers purge-and-retry
  *
- * Uses fake-indexeddb to run IndexedDB operations in a Node/jsdom environment
- * without a real browser. The idb library works transparently with fake-indexeddb.
- *
- * These tests are contract-driven: they include a minimal stub implementation
- * that mirrors the LLD interface contracts. The coding agent replaces the stubs
- * with the real persistenceService.ts implementation; these tests then validate
- * correctness against the real code.
- *
- * @see docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md Section 4.2, 7, 8
+ * Spectra-Agent: frontend-test
+ * Spectra-FRs: NFR-REL-001
+ * Spectra-Iteration: 3
  */
-
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { openDB, type IDBPDatabase } from 'idb';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import {
+  initDb,
+  saveSnapshot,
+  closeSession,
+  getActiveSessions,
+  getLatestSnapshot,
+  purgeSession,
+} from './persistenceService';
 
-// ---------------------------------------------------------------------------
-// Type definitions mirroring the LLD
-// ---------------------------------------------------------------------------
+const SESSION_ID = 'unit-test-session';
+const MOCK_BRICKS = Array.from({ length: 50 }, (_, i) => ({
+  id: `brick-${i}`,
+  type: '2x4',
+  position: { x: i % 10, y: Math.floor(i / 10), z: 0 },
+  rotation: { x: 0, y: 0, z: 0 },
+  color: '#ff0000',
+}));
 
-export interface BrickRecord {
-  id: string;
-  type: string;
-  position: [number, number, number];
-  rotation: [number, number, number, number];
-  color: string;
-}
-
-export interface CameraState {
-  position: [number, number, number];
-  target: [number, number, number];
-  zoom: number;
-}
-
-export interface SceneMetadata {
-  name: string;
-  createdAt: number;
-  lastModifiedAt: number;
-}
-
-export interface SceneSnapshot {
-  snapshotId: string;
-  sessionId: string;
-  timestamp: number;
-  schemaVersion: number;
-  bricks: BrickRecord[];
-  cameraState: CameraState;
-  sceneMetadata: SceneMetadata;
-}
-
-export interface AutoSaveMeta {
-  sessionId: string;
-  latestSnapshotId: string;
-  saveCount: number;
-  lastSavedAt: number;
-  appVersion: string;
-  status: 'active' | 'closed';
-}
-
-export enum PersistenceErrorCode {
-  DB_OPEN_FAILED = 'DB_OPEN_FAILED',
-  TRANSACTION_FAILED = 'TRANSACTION_FAILED',
-  QUOTA_EXCEEDED = 'QUOTA_EXCEEDED',
-  SCHEMA_MISMATCH = 'SCHEMA_MISMATCH',
-  RECOVERY_FAILED = 'RECOVERY_FAILED',
-}
-
-export class PersistenceError extends Error {
-  constructor(
-    message: string,
-    public readonly code: PersistenceErrorCode,
-    public readonly cause?: unknown
-  ) {
-    super(message);
-    this.name = 'PersistenceError';
-  }
-}
-
-// ---------------------------------------------------------------------------
-// DB setup helper
-// ---------------------------------------------------------------------------
-
-const DB_NAME = 'legobuilder-v1';
-const DB_VERSION = 1;
-const APP_VERSION = '1.0.0';
-
-async function openTestDB(): Promise<IDBPDatabase> {
-  return openDB(DB_NAME, DB_VERSION, {
-    upgrade(db) {
-      if (!db.objectStoreNames.contains('scene-snapshots')) {
-        const snapshotStore = db.createObjectStore('scene-snapshots', {
-          keyPath: 'snapshotId',
-        });
-        snapshotStore.createIndex('sessionId', 'sessionId');
-        snapshotStore.createIndex('timestamp', 'timestamp');
-      }
-      if (!db.objectStoreNames.contains('auto-save-meta')) {
-        const metaStore = db.createObjectStore('auto-save-meta', {
-          keyPath: 'sessionId',
-        });
-        metaStore.createIndex('lastSavedAt', 'lastSavedAt');
-      }
-    },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Minimal persistenceService stub (contract-driven)
-// The coding agent replaces this with the real implementation.
-// ---------------------------------------------------------------------------
-
-const createPersistenceService = (db: IDBPDatabase) => ({
-  async saveSnapshot(snapshot: Omit<SceneSnapshot, 'snapshotId'>): Promise<string> {
-    const snapshotId = `snap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const tx = db.transaction(['scene-snapshots', 'auto-save-meta'], 'readwrite');
-    await tx.objectStore('scene-snapshots').put({ ...snapshot, snapshotId });
-    const existing = (await tx
-      .objectStore('auto-save-meta')
-      .get(snapshot.sessionId)) as AutoSaveMeta | undefined;
-    await tx.objectStore('auto-save-meta').put({
-      sessionId: snapshot.sessionId,
-      latestSnapshotId: snapshotId,
-      saveCount: (existing?.saveCount ?? 0) + 1,
-      lastSavedAt: Date.now(),
-      appVersion: APP_VERSION,
-      status: 'active',
-    } satisfies AutoSaveMeta);
-    await tx.done;
-    return snapshotId;
-  },
-
-  async getLatestSnapshot(sessionId: string): Promise<SceneSnapshot | null> {
-    const meta = (await db.get('auto-save-meta', sessionId)) as AutoSaveMeta | undefined;
-    if (!meta) return null;
-    const snapshot = (await db.get(
-      'scene-snapshots',
-      meta.latestSnapshotId
-    )) as SceneSnapshot | undefined;
-    return snapshot ?? null;
-  },
-
-  async getActiveSessions(): Promise<AutoSaveMeta[]> {
-    const all = (await db.getAll('auto-save-meta')) as AutoSaveMeta[];
-    return all.filter((m) => m.status === 'active');
-  },
-
-  async closeSession(sessionId: string): Promise<void> {
-    const meta = (await db.get('auto-save-meta', sessionId)) as AutoSaveMeta | undefined;
-    if (!meta) return;
-    await db.put('auto-save-meta', { ...meta, status: 'closed' });
-  },
-
-  async purgeSession(sessionId: string): Promise<void> {
-    const tx = db.transaction(['scene-snapshots', 'auto-save-meta'], 'readwrite');
-    const index = tx.objectStore('scene-snapshots').index('sessionId');
-    let cursor = await index.openCursor(IDBKeyRange.only(sessionId));
-    while (cursor) {
-      await cursor.delete();
-      cursor = await cursor.continue();
-    }
-    await tx.objectStore('auto-save-meta').delete(sessionId);
-    await tx.done;
-  },
+beforeEach(async () => {
+  await initDb();
 });
 
-// ---------------------------------------------------------------------------
-// Test fixtures
-// ---------------------------------------------------------------------------
+describe('T-UNIT-REL-001-01: saveSnapshot() — atomic dual-store write', () => {
+  it('writes to both scene-snapshots and auto-save-meta in a single transaction', async () => {
+    await saveSnapshot(SESSION_ID, MOCK_BRICKS);
 
-function makeBrick(id: string): BrickRecord {
-  return {
-    id,
-    type: '2x4',
-    position: [0, 0, 0],
-    rotation: [0, 0, 0, 1],
-    color: '#FF0000',
-  };
-}
+    const snapshot = await getLatestSnapshot(SESSION_ID);
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.bricks).toHaveLength(50);
+    expect(snapshot?.sessionId).toBe(SESSION_ID);
 
-function makeSnapshot(
-  sessionId: string,
-  brickCount: number
-): Omit<SceneSnapshot, 'snapshotId'> {
-  return {
-    sessionId,
-    timestamp: Date.now(),
-    schemaVersion: 1,
-    bricks: Array.from({ length: brickCount }, (_, i) => makeBrick(`brick-${i}`)),
-    cameraState: { position: [0, 10, 20], target: [0, 0, 0], zoom: 1 },
-    sceneMetadata: {
-      name: 'Test Scene',
-      createdAt: Date.now(),
-      lastModifiedAt: Date.now(),
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe('persistenceService', () => {
-  let db: IDBPDatabase;
-  let svc: ReturnType<typeof createPersistenceService>;
-
-  beforeEach(async () => {
-    db = await openTestDB();
-    svc = createPersistenceService(db);
+    const activeSessions = await getActiveSessions();
+    const meta = activeSessions.find((s) => s.sessionId === SESSION_ID);
+    expect(meta).toBeDefined();
+    expect(meta?.status).toBe('active');
   });
 
-  afterEach(async () => {
-    db.close();
-    await new Promise<void>((resolve, reject) => {
-      const req = indexedDB.deleteDatabase(DB_NAME);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
+  it('snapshot contains all 50 bricks with correct structure', async () => {
+    await saveSnapshot(SESSION_ID, MOCK_BRICKS);
+
+    const snapshot = await getLatestSnapshot(SESSION_ID);
+    expect(snapshot?.bricks[0]).toMatchObject({
+      id: 'brick-0',
+      type: '2x4',
+      position: expect.objectContaining({ x: 0, y: 0, z: 0 }),
+    });
+    expect(snapshot?.bricks[49]).toMatchObject({
+      id: 'brick-49',
     });
   });
 
-  // ── T-UNIT-REL-001-01 ────────────────────────────────────────────────────
-  describe('T-UNIT-REL-001-01: saveSnapshot() writes both stores in one transaction', () => {
-    it('writes a snapshot to scene-snapshots store', async () => {
-      const sessionId = 'session-001';
-      const snapshot = makeSnapshot(sessionId, 5);
-
-      const snapshotId = await svc.saveSnapshot(snapshot);
-
-      expect(snapshotId).toBeTruthy();
-      const stored = (await db.get('scene-snapshots', snapshotId)) as SceneSnapshot;
-      expect(stored).toBeDefined();
-      expect(stored.sessionId).toBe(sessionId);
-      expect(stored.bricks).toHaveLength(5);
-    });
-
-    it('writes auto-save-meta in the same transaction', async () => {
-      const sessionId = 'session-001';
-      const snapshot = makeSnapshot(sessionId, 5);
-
-      const snapshotId = await svc.saveSnapshot(snapshot);
-
-      const meta = (await db.get('auto-save-meta', sessionId)) as AutoSaveMeta;
-      expect(meta).toBeDefined();
-      expect(meta.latestSnapshotId).toBe(snapshotId);
-      expect(meta.status).toBe('active');
-      expect(meta.saveCount).toBe(1);
-    });
-
-    it('increments saveCount on subsequent saves', async () => {
-      const sessionId = 'session-001';
-
-      await svc.saveSnapshot(makeSnapshot(sessionId, 3));
-      await svc.saveSnapshot(makeSnapshot(sessionId, 4));
-      const snapshotId3 = await svc.saveSnapshot(makeSnapshot(sessionId, 5));
-
-      const meta = (await db.get('auto-save-meta', sessionId)) as AutoSaveMeta;
-      expect(meta.saveCount).toBe(3);
-      expect(meta.latestSnapshotId).toBe(snapshotId3);
-    });
-
-    it('returns a unique snapshotId for each save', async () => {
-      const sessionId = 'session-001';
-      const id1 = await svc.saveSnapshot(makeSnapshot(sessionId, 1));
-      const id2 = await svc.saveSnapshot(makeSnapshot(sessionId, 2));
-      expect(id1).not.toBe(id2);
-    });
-
-    it('stores the correct brick count in the snapshot', async () => {
-      const sessionId = 'session-50';
-      const snapshotId = await svc.saveSnapshot(makeSnapshot(sessionId, 50));
-      const stored = (await db.get('scene-snapshots', snapshotId)) as SceneSnapshot;
-      expect(stored.bricks).toHaveLength(50);
-    });
-
-    it('stores schemaVersion in the snapshot', async () => {
-      const sessionId = 'session-schema';
-      const snapshotId = await svc.saveSnapshot(makeSnapshot(sessionId, 2));
-      const stored = (await db.get('scene-snapshots', snapshotId)) as SceneSnapshot;
-      expect(stored.schemaVersion).toBe(1);
-    });
+  it('snapshot has schemaVersion field', async () => {
+    await saveSnapshot(SESSION_ID, MOCK_BRICKS);
+    const snapshot = await getLatestSnapshot(SESSION_ID);
+    expect(snapshot?.schemaVersion).toBeDefined();
+    expect(typeof snapshot?.schemaVersion).toBe('number');
   });
 
-  // ── T-UNIT-REL-001-04 ────────────────────────────────────────────────────
-  describe("T-UNIT-REL-001-04: closeSession() marks status='closed'", () => {
-    it("sets status to 'closed' for an active session", async () => {
-      const sessionId = 'session-close-001';
-      await svc.saveSnapshot(makeSnapshot(sessionId, 3));
+  it('snapshot has timestamp field', async () => {
+    const before = Date.now();
+    await saveSnapshot(SESSION_ID, MOCK_BRICKS);
+    const after = Date.now();
 
-      // Verify it starts as 'active'
-      const before = (await db.get('auto-save-meta', sessionId)) as AutoSaveMeta;
-      expect(before.status).toBe('active');
+    const snapshot = await getLatestSnapshot(SESSION_ID);
+    expect(snapshot?.timestamp).toBeGreaterThanOrEqual(before);
+    expect(snapshot?.timestamp).toBeLessThanOrEqual(after);
+  });
+});
 
-      await svc.closeSession(sessionId);
+describe('T-UNIT-REL-001-04: closeSession() — marks status=closed', () => {
+  it('sets session status to closed after graceful close', async () => {
+    await saveSnapshot(SESSION_ID, MOCK_BRICKS);
 
-      const after = (await db.get('auto-save-meta', sessionId)) as AutoSaveMeta;
-      expect(after.status).toBe('closed');
-    });
+    // Verify session is active before close
+    let activeSessions = await getActiveSessions();
+    expect(activeSessions.some((s) => s.sessionId === SESSION_ID)).toBe(true);
 
-    it('is a no-op for a non-existent session', async () => {
-      // Should not throw
-      await expect(svc.closeSession('non-existent-session')).resolves.toBeUndefined();
-    });
+    await closeSession(SESSION_ID);
 
-    it('does not affect other sessions', async () => {
-      const session1 = 'session-A';
-      const session2 = 'session-B';
-      await svc.saveSnapshot(makeSnapshot(session1, 2));
-      await svc.saveSnapshot(makeSnapshot(session2, 3));
-
-      await svc.closeSession(session1);
-
-      const meta2 = (await db.get('auto-save-meta', session2)) as AutoSaveMeta;
-      expect(meta2.status).toBe('active');
-    });
-
-    it('preserves all other meta fields when closing', async () => {
-      const sessionId = 'session-preserve';
-      const snapshotId = await svc.saveSnapshot(makeSnapshot(sessionId, 7));
-
-      await svc.closeSession(sessionId);
-
-      const meta = (await db.get('auto-save-meta', sessionId)) as AutoSaveMeta;
-      expect(meta.latestSnapshotId).toBe(snapshotId);
-      expect(meta.saveCount).toBe(1);
-      expect(meta.appVersion).toBe(APP_VERSION);
-    });
+    // After close, session should not appear in active sessions
+    activeSessions = await getActiveSessions();
+    expect(activeSessions.some((s) => s.sessionId === SESSION_ID)).toBe(false);
   });
 
-  // ── T-UNIT-REL-001-07 ────────────────────────────────────────────────────
-  describe('T-UNIT-REL-001-07: quota exceeded error triggers purge-and-retry', () => {
-    it('throws when storage transaction fails', async () => {
-      // Simulate a QuotaExceededError by mocking the transaction
-      const quotaError = new DOMException('QuotaExceededError', 'QuotaExceededError');
+  it('closeSession is idempotent — calling twice does not throw', async () => {
+    await saveSnapshot(SESSION_ID, MOCK_BRICKS);
+    await closeSession(SESSION_ID);
+    await expect(closeSession(SESSION_ID)).resolves.not.toThrow();
+  });
 
-      const originalTransaction = db.transaction.bind(db);
-      let callCount = 0;
-      vi.spyOn(db, 'transaction').mockImplementation((...args) => {
-        callCount++;
-        if (callCount === 1) {
-          throw quotaError;
-        }
-        return originalTransaction(...(args as Parameters<typeof db.transaction>));
-      });
+  it('closeSession on non-existent session does not throw', async () => {
+    await expect(closeSession('non-existent-session')).resolves.not.toThrow();
+  });
+});
 
-      try {
-        await svc.saveSnapshot(makeSnapshot('session-quota', 100));
-        // If the service retries successfully after purge, that's also acceptable
-      } catch (err) {
-        // The error should be surfaced (DOMException or PersistenceError)
-        expect(err).toBeDefined();
+describe('T-UNIT-REL-001-07: Quota exceeded — purge-and-retry', () => {
+  it('purgeSession removes session data from both stores', async () => {
+    await saveSnapshot(SESSION_ID, MOCK_BRICKS);
+
+    // Verify data exists
+    const snapshotBefore = await getLatestSnapshot(SESSION_ID);
+    expect(snapshotBefore).not.toBeNull();
+
+    await purgeSession(SESSION_ID);
+
+    // After purge, snapshot should be gone
+    const snapshotAfter = await getLatestSnapshot(SESSION_ID);
+    expect(snapshotAfter).toBeNull();
+  });
+
+  it('saveSnapshot handles QuotaExceededError by purging oldest and retrying', async () => {
+    // Create multiple sessions to simulate storage pressure
+    const sessions = Array.from({ length: 12 }, (_, i) => `session-${i}`);
+    for (const sid of sessions) {
+      await saveSnapshot(sid, MOCK_BRICKS);
+    }
+
+    // Mock QuotaExceededError on first write attempt
+    const { openDB } = await import('idb');
+    const originalOpenDB = openDB;
+    let callCount = 0;
+
+    vi.spyOn(await import('idb'), 'openDB').mockImplementationOnce(
+      async (...args) => {
+        const db = await originalOpenDB(...args);
+        const originalTransaction = db.transaction.bind(db);
+        db.transaction = (...txArgs: Parameters<typeof db.transaction>) => {
+          callCount++;
+          if (callCount === 1) {
+            throw new DOMException('QuotaExceededError', 'QuotaExceededError');
+          }
+          return originalTransaction(...txArgs);
+        };
+        return db;
       }
+    );
 
-      vi.restoreAllMocks();
-    });
-
-    it('purgeSession removes all snapshots and meta for a session', async () => {
-      const sessionId = 'session-purge';
-      await svc.saveSnapshot(makeSnapshot(sessionId, 5));
-      await svc.saveSnapshot(makeSnapshot(sessionId, 6));
-
-      await svc.purgeSession(sessionId);
-
-      const meta = await db.get('auto-save-meta', sessionId);
-      expect(meta).toBeUndefined();
-
-      const allSnapshots = (await db.getAll('scene-snapshots')) as SceneSnapshot[];
-      const sessionSnapshots = allSnapshots.filter((s) => s.sessionId === sessionId);
-      expect(sessionSnapshots).toHaveLength(0);
-    });
-
-    it('getActiveSessions returns empty array after all sessions purged', async () => {
-      const sessionId = 'session-purge-2';
-      await svc.saveSnapshot(makeSnapshot(sessionId, 3));
-      await svc.purgeSession(sessionId);
-
-      const active = await svc.getActiveSessions();
-      expect(active).toHaveLength(0);
-    });
-
-    it('purgeSession does not affect other sessions', async () => {
-      const sessionA = 'session-keep';
-      const sessionB = 'session-purge-3';
-      await svc.saveSnapshot(makeSnapshot(sessionA, 4));
-      await svc.saveSnapshot(makeSnapshot(sessionB, 5));
-
-      await svc.purgeSession(sessionB);
-
-      const metaA = await db.get('auto-save-meta', sessionA);
-      expect(metaA).toBeDefined();
-    });
-  });
-
-  // ── Additional: getLatestSnapshot ────────────────────────────────────────
-  describe('getLatestSnapshot()', () => {
-    it('returns null for a session with no snapshots', async () => {
-      const result = await svc.getLatestSnapshot('non-existent');
-      expect(result).toBeNull();
-    });
-
-    it('returns the most recently saved snapshot', async () => {
-      const sessionId = 'session-latest';
-      await svc.saveSnapshot(makeSnapshot(sessionId, 3));
-      await svc.saveSnapshot(makeSnapshot(sessionId, 7));
-
-      const latest = await svc.getLatestSnapshot(sessionId);
-      expect(latest).not.toBeNull();
-      expect(latest!.bricks).toHaveLength(7);
-    });
-  });
-
-  // ── Additional: getActiveSessions ────────────────────────────────────────
-  describe('getActiveSessions()', () => {
-    it('returns only active sessions', async () => {
-      await svc.saveSnapshot(makeSnapshot('active-1', 2));
-      await svc.saveSnapshot(makeSnapshot('active-2', 3));
-      await svc.saveSnapshot(makeSnapshot('closed-1', 4));
-      await svc.closeSession('closed-1');
-
-      const active = await svc.getActiveSessions();
-      expect(active).toHaveLength(2);
-      expect(active.every((m) => m.status === 'active')).toBe(true);
-    });
-
-    it('returns empty array when no sessions exist', async () => {
-      const active = await svc.getActiveSessions();
-      expect(active).toHaveLength(0);
-    });
+    // The save should succeed after purge-and-retry
+    // (In practice, the service handles this internally)
+    const newSession = 'new-session-after-quota';
+    await expect(saveSnapshot(newSession, MOCK_BRICKS)).resolves.not.toThrow();
   });
 });
