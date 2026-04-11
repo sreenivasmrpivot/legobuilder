@@ -1,453 +1,575 @@
 # Low-Level Design: NFR-PERF-002
 ## Enforce <2ms Raycast Latency in 500-Brick Scenes via Instrumented Timing
 
-**FR-ID:** NFR-PERF-002
-**Issue:** [#27](https://github.com/sreenivasmrpivot/legobuilder/issues/27)
-**Author:** Spectra Design Agent
-**Status:** Draft — Awaiting Gate 6a Human Review
-**Date:** 2026-04-11
-**Area:** Frontend (client-side SPA — Three.js / React Three Fiber)
+**FR-ID:** NFR-PERF-002  
+**Issue:** #27  
+**Status:** Draft — Awaiting Gate 6a Design Review  
+**Author:** Spectra Design Agent  
+**Date:** 2026-04-11  
+**Depends on:** FR-SCENE-003 (#9) — BVH raycast acceleration  
 
 ---
 
 ## 1. Overview
 
-NFR-PERF-002 mandates that every raycast operation in a 500-brick scene completes in **<2 ms (p95)**. The primary acceleration mechanism is a **Bounding Volume Hierarchy (BVH)** built via `three-mesh-bvh` (already scoped by FR-SCENE-003 / Issue #9). This LLD specifies:
+NFR-PERF-002 mandates that every raycast operation in a 500-brick scene completes in **<2 ms (p95)**. This LLD specifies:
 
-- The instrumented timing wrapper that measures raycast latency in test/dev builds.
-- The BVH integration contract with the scene graph.
-- The performance test harness (`raycastLatency.test.ts`) that enforces the threshold in CI.
-- The statistical sampling strategy (100 raycasts → p95 calculation).
-- Error handling, fallback behaviour, and security considerations.
+- The BVH-accelerated raycast engine (`bvhManager.ts`, `raycastEngine.ts`) that achieves the latency target
+- An instrumented timing wrapper using `performance.now()` active only in test/development builds
+- A p95 statistical aggregator (`performanceMonitor.ts`) that collects and evaluates timing samples
+- A CI-enforced Vitest performance test (`raycastLatency.test.ts`) that fails the build when the threshold is exceeded
+- Incremental BVH rebuild strategy for brick add/remove mutations
 
----
-
-## 2. Acceptance Criteria (Restated)
-
-| ID | Criterion | Threshold |
-|----|-----------|----------|
-| AC-1 | p95 raycast time over 100 raycasts in a 500-brick scene with BVH | **< 2 ms** |
-| AC-2 | BVH vs. naive raycast speedup at >100 bricks | **>= 5x** |
-| AC-3 | CI build fails when threshold is exceeded | **Hard gate** |
+No production code is included in this document — this is a design artifact only.
 
 ---
 
-## 3. Component Architecture
+## 2. Component Architecture
 
-### 3.1 Module Map
-
-```
-frontend/
-├── src/
-│   ├── engines/
-│   │   ├── bvhManager.ts          ← BVH lifecycle (build, rebuild, dispose)
-│   │   └── raycastEngine.ts       ← Instrumented raycast wrapper
-│   ├── utils/
-│   │   └── performanceMonitor.ts  ← Existing scaffold — extended with p95 helper
-│   └── stores/
-│       └── sceneStore.ts          ← Existing — exposes bvhReady flag
-└── tests/
-    └── performance/
-        └── raycastLatency.test.ts ← New: CI-enforced latency test
-```
-
-### 3.2 Dependency Graph
+### 2.1 Module Map
 
 ```
+frontend/src/
+├── engine/
+│   ├── bvhManager.ts          [MODIFIED] BVH lifecycle: init, rebuild, dispose
+│   ├── raycastEngine.ts       [MODIFIED] Instrumented raycast wrapper
+│   └── performanceMonitor.ts  [MODIFIED] p95 aggregator + threshold enforcement
+├── hooks/
+│   └── useRaycast.ts          [MODIFIED] React hook — delegates to raycastEngine
+├── components/
+│   └── Viewport.tsx           [MODIFIED] Passes instrumentation flag to useRaycast
+frontend/tests/
+└── performance/
+    └── raycastLatency.test.ts [NEW] CI performance test — 100 raycasts, p95 < 2ms
+```
+
+### 2.2 Module Responsibilities
+
+| Module | Responsibility | Owned By |
+|--------|---------------|----------|
+| `bvhManager.ts` | Monkey-patch `Mesh.prototype.raycast` with `acceleratedRaycast` once at init; incremental rebuild on brick mutation | FR-SCENE-003 (extended here) |
+| `raycastEngine.ts` | Wrap `raycaster.intersectObjects()` with `performance.now()` timing; emit sample to `performanceMonitor` | NFR-PERF-002 |
+| `performanceMonitor.ts` | Collect timing samples; compute p50/p95/p99; enforce `NFR_PERF_002_THRESHOLD_MS`; expose `getStats()` | NFR-PERF-002 |
+| `useRaycast.ts` | React hook — calls `raycastEngine.raycast()`; passes `isInstrumented` flag from env | NFR-PERF-002 |
+| `raycastLatency.test.ts` | Vitest test — builds 500-brick scene, runs 100 raycasts, asserts p95 < 2ms and speedup ≥ 5× | NFR-PERF-002 |
+
+### 2.3 Dependency Graph
+
+```
+Viewport.tsx
+  └── useRaycast.ts
+        └── raycastEngine.ts
+              ├── bvhManager.ts  (BVH state)
+              └── performanceMonitor.ts  (timing samples)
+
 raycastLatency.test.ts
-  └── raycastEngine.ts
-        ├── bvhManager.ts
-        │     ├── three-mesh-bvh  (npm)
-        │     └── three           (npm)
-        └── performanceMonitor.ts
-              └── (no external deps)
+  ├── raycastEngine.ts
+  ├── bvhManager.ts
+  └── performanceMonitor.ts
 ```
-
-### 3.3 Module Responsibilities
-
-| Module | Responsibility | Owns |
-|--------|---------------|------|
-| `bvhManager.ts` | Build/rebuild/dispose BVH on scene mutations | BVH lifecycle |
-| `raycastEngine.ts` | Wrap `Raycaster.intersectObjects()` with timing instrumentation | Latency measurement |
-| `performanceMonitor.ts` | Collect timing samples, compute p95, expose metrics | Statistics |
-| `raycastLatency.test.ts` | Spin up 500-brick scene, run 100 raycasts, assert p95 < 2 ms | CI enforcement |
 
 ---
 
-## 4. Data Models
+## 3. Data Models
 
-### 4.1 RaycastSample
+### 3.1 RaycastSample
 
 ```typescript
-/** A single instrumented raycast measurement */
+/** Single timing observation from one raycast call */
 interface RaycastSample {
   /** Wall-clock duration in milliseconds (performance.now() delta) */
   durationMs: number;
-  /** Number of bricks in the scene at time of measurement */
-  brickCount: number;
-  /** Whether BVH was active for this raycast */
-  bvhEnabled: boolean;
-  /** Unix timestamp of the measurement */
+  /** Number of objects tested during this raycast */
+  objectCount: number;
+  /** Number of intersections returned */
+  hitCount: number;
+  /** Monotonic timestamp of the sample (performance.now() at call start) */
   timestamp: number;
 }
 ```
 
-### 4.2 PerformanceReport
+### 3.2 RaycastStats
 
 ```typescript
-/** Aggregated statistics for a batch of raycasts */
-interface PerformanceReport {
+/** Aggregated statistics over a sample window */
+interface RaycastStats {
   sampleCount: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
   minMs: number;
   maxMs: number;
   meanMs: number;
-  /** p50 latency */
-  p50Ms: number;
-  /** p95 latency — primary SLA metric */
-  p95Ms: number;
-  /** p99 latency — informational */
-  p99Ms: number;
-  bvhEnabled: boolean;
-  brickCount: number;
-  /** true when p95Ms < NFR_PERF_002_THRESHOLD_MS */
-  passed: boolean;
+  /** true if p95 < NFR_PERF_002_THRESHOLD_MS */
+  meetsThreshold: boolean;
 }
 ```
 
-### 4.3 BvhState (sceneStore extension)
+### 3.3 BvhState
 
 ```typescript
-/** Slice added to sceneStore for BVH lifecycle tracking */
+/** Internal state managed by bvhManager */
 interface BvhState {
-  /** BVH has been built and is current */
-  bvhReady: boolean;
-  /** Timestamp of last BVH build (ms since epoch) */
-  bvhBuiltAt: number | null;
-  /** Number of bricks when BVH was last built */
-  bvhBrickCount: number;
-  /** BVH build duration in ms (for diagnostics) */
-  bvhBuildDurationMs: number | null;
+  /** Whether acceleratedRaycast has been patched onto Mesh.prototype */
+  isPatched: boolean;
+  /** Map from brickId → THREE.Mesh for incremental rebuild tracking */
+  meshRegistry: Map<string, THREE.Mesh>;
+  /** Timestamp of last full rebuild (performance.now()) */
+  lastFullRebuildAt: number;
+  /** Count of incremental rebuilds since last full rebuild */
+  incrementalRebuildCount: number;
 }
 ```
 
----
-
-## 5. API / Interface Contracts
-
-### 5.1 `bvhManager.ts`
+### 3.4 Constants
 
 ```typescript
-import { Mesh } from 'three';
-import { acceleratedRaycast } from 'three-mesh-bvh';
-
-// Monkey-patch Three.js Mesh prototype once at app init
-// (idempotent — safe to call multiple times)
-export function installBvhRaycast(): void;
-
-/**
- * Build a BVH for every mesh in `meshes`.
- * Mutates each mesh's geometry.boundsTree in-place.
- * @param meshes  Array of Three.js Mesh objects representing bricks
- * @returns       Build duration in milliseconds
- */
-export function buildBvh(meshes: Mesh[]): number;
-
-/**
- * Dispose BVH from all meshes (frees memory).
- * Call before scene teardown or full rebuild.
- */
-export function disposeBvh(meshes: Mesh[]): void;
-
-/**
- * Rebuild BVH incrementally after brick add/remove.
- * Only rebuilds geometries that changed.
- * @param added    Newly added meshes
- * @param removed  Meshes being removed
- * @param all      Full current mesh list (for full rebuild fallback)
- */
-export function rebuildBvhIncremental(
-  added: Mesh[],
-  removed: Mesh[],
-  all: Mesh[]
-): void;
-```
-
-### 5.2 `raycastEngine.ts`
-
-```typescript
-import { Raycaster, Object3D, Intersection } from 'three';
-import { RaycastSample } from '../types/performance';
-
-/** Global threshold constant — single source of truth */
-export const NFR_PERF_002_THRESHOLD_MS = 2.0;
-
-/**
- * Instrumented raycast. In production builds the timing overhead
- * is stripped via tree-shaking (import.meta.env.PROD guard).
- *
- * @param raycaster  Configured Three.js Raycaster
- * @param objects    Scene objects to test against
- * @param recursive  Whether to recurse into children
- * @returns          Intersection results + timing sample
- */
-export function instrumentedRaycast(
-  raycaster: Raycaster,
-  objects: Object3D[],
-  recursive?: boolean
-): { intersections: Intersection[]; sample: RaycastSample };
-
-/**
- * Pure raycast — no instrumentation overhead.
- * Used in production render loop.
- */
-export function fastRaycast(
-  raycaster: Raycaster,
-  objects: Object3D[],
-  recursive?: boolean
-): Intersection[];
-```
-
-### 5.3 `performanceMonitor.ts` (extended)
-
-```typescript
-/** Existing scaffold extended with p95 computation */
-
-/**
- * Compute percentile from a sorted array of durations.
- * @param sortedSamples  Ascending-sorted duration array
- * @param percentile     0-100
- */
-export function computePercentile(
-  sortedSamples: number[],
-  percentile: number
-): number;
-
-/**
- * Aggregate an array of RaycastSamples into a PerformanceReport.
- * Automatically sorts samples before computing percentiles.
- */
-export function aggregateSamples(
-  samples: RaycastSample[],
-  threshold?: number
-): PerformanceReport;
-
-/**
- * Format a PerformanceReport as a human-readable string
- * suitable for CI log output.
- */
-export function formatReport(report: PerformanceReport): string;
+// src/engine/constants.ts
+export const NFR_PERF_002_THRESHOLD_MS = 2.0;   // p95 SLA in milliseconds
+export const NFR_PERF_002_SAMPLE_COUNT = 100;   // raycasts per test run
+export const NFR_PERF_002_SPEEDUP_MIN = 5.0;    // minimum BVH vs naive speedup
+export const BVH_MAX_INCREMENTAL_REBUILDS = 50; // full rebuild after N incremental
+export const BVH_BUILD_TIMEOUT_MS = 50;         // max acceptable BVH build time
 ```
 
 ---
 
-## 6. Sequence Diagrams
+## 4. Interface Contracts
 
-### 6.1 Happy Path — BVH Raycast Under Threshold
+### 4.1 BvhManagerInterface
+
+```typescript
+interface BvhManagerInterface {
+  /**
+   * Monkey-patches Mesh.prototype.raycast with acceleratedRaycast.
+   * Idempotent — safe to call multiple times.
+   * Must be called once before any raycast.
+   */
+  initBvh(): void;
+
+  /**
+   * Registers a mesh for BVH tracking and computes its BVH.
+   * @param brickId - UUID of the brick
+   * @param mesh - THREE.Mesh to accelerate
+   */
+  registerMesh(brickId: string, mesh: THREE.Mesh): void;
+
+  /**
+   * Removes a mesh from BVH tracking and disposes its BVH geometry.
+   * @param brickId - UUID of the brick to deregister
+   */
+  deregisterMesh(brickId: string): void;
+
+  /**
+   * Incrementally rebuilds BVH for a single changed mesh.
+   * Falls back to full rebuild after BVH_MAX_INCREMENTAL_REBUILDS.
+   * @param brickId - UUID of the changed brick
+   */
+  rebuildBvhIncremental(brickId: string): void;
+
+  /**
+   * Forces a full BVH rebuild across all registered meshes.
+   * Use after bulk scene mutations.
+   */
+  rebuildBvhFull(): void;
+
+  /**
+   * Disposes all BVH geometry and resets state.
+   * Call on scene teardown.
+   */
+  dispose(): void;
+
+  /** Returns current BVH state snapshot (for diagnostics). */
+  getState(): Readonly<BvhState>;
+}
+```
+
+### 4.2 RaycastEngineInterface
+
+```typescript
+interface RaycastEngineInterface {
+  /**
+   * Performs a BVH-accelerated raycast and optionally records timing.
+   * @param raycaster - Configured THREE.Raycaster
+   * @param objects - Scene objects to test
+   * @param recursive - Whether to test descendants
+   * @param isInstrumented - When true, records timing sample
+   * @returns Array of intersections sorted by distance
+   */
+  raycast(
+    raycaster: THREE.Raycaster,
+    objects: THREE.Object3D[],
+    recursive: boolean,
+    isInstrumented: boolean
+  ): THREE.Intersection[];
+}
+```
+
+### 4.3 PerformanceMonitorInterface
+
+```typescript
+interface PerformanceMonitorInterface {
+  /**
+   * Records a timing sample.
+   * @param sample - RaycastSample to record
+   */
+  record(sample: RaycastSample): void;
+
+  /**
+   * Computes aggregated statistics over all recorded samples.
+   * @returns RaycastStats with p50/p95/p99 and threshold compliance
+   */
+  getStats(): RaycastStats;
+
+  /**
+   * Resets the sample buffer.
+   * Call between test runs to avoid cross-contamination.
+   */
+  reset(): void;
+
+  /**
+   * Returns the raw sample buffer (for test assertions).
+   */
+  getSamples(): ReadonlyArray<RaycastSample>;
+}
+```
+
+### 4.4 useRaycast Hook
+
+```typescript
+interface UseRaycastOptions {
+  /** Objects to test on each raycast */
+  objects: THREE.Object3D[];
+  /** Whether to recurse into children */
+  recursive?: boolean;
+}
+
+interface UseRaycastReturn {
+  /**
+   * Performs a raycast from the given NDC coordinates.
+   * Instrumented automatically in non-production builds.
+   */
+  raycast: (ndcX: number, ndcY: number) => THREE.Intersection[];
+  /** Latest performance stats (undefined in production) */
+  stats: RaycastStats | undefined;
+}
+
+function useRaycast(options: UseRaycastOptions): UseRaycastReturn;
+```
+
+---
+
+## 5. Sequence Diagrams
+
+### 5.1 Happy Path — Instrumented Raycast in Test Build
 
 ```mermaid
 sequenceDiagram
     participant Test as raycastLatency.test.ts
-    participant BM as bvhManager
-    participant RE as raycastEngine
-    participant PM as performanceMonitor
-    participant THREE as Three.js Raycaster
+    participant RE as raycastEngine.ts
+    participant BVH as bvhManager.ts
+    participant PM as performanceMonitor.ts
+    participant THREE as THREE.Raycaster
 
-    Test->>BM: installBvhRaycast()
-    Note over BM: Monkey-patches Mesh.raycast once
-
-    Test->>Test: buildScene(500 bricks)
-    Test->>BM: buildBvh(meshes)
-    BM-->>Test: buildDurationMs
-
+    Test->>BVH: initBvh()
+    BVH->>BVH: patch Mesh.prototype.raycast (idempotent)
+    loop 500 bricks
+        Test->>BVH: registerMesh(brickId, mesh)
+        BVH->>BVH: computeBoundsTree(mesh.geometry)
+    end
+    Test->>PM: reset()
     loop 100 raycasts
-        Test->>RE: instrumentedRaycast(raycaster, objects)
+        Test->>RE: raycast(raycaster, objects, true, isInstrumented=true)
         RE->>RE: t0 = performance.now()
-        RE->>THREE: raycaster.intersectObjects(objects, recursive)
+        RE->>THREE: raycaster.intersectObjects(objects, true)
         THREE-->>RE: intersections[]
         RE->>RE: t1 = performance.now()
-        RE->>RE: sample = { durationMs: t1-t0, bvhEnabled: true }
-        RE-->>Test: { intersections, sample }
-        Test->>PM: collect(sample)
+        RE->>PM: record({ durationMs: t1-t0, objectCount, hitCount, timestamp: t0 })
+        RE-->>Test: intersections[]
     end
-
-    Test->>PM: aggregateSamples(samples)
-    PM-->>Test: PerformanceReport { p95Ms: 0.8, passed: true }
-    Test->>Test: expect(report.p95Ms).toBeLessThan(2.0) PASS
+    Test->>PM: getStats()
+    PM-->>Test: { p95Ms, meetsThreshold, ... }
+    Test->>Test: assert p95Ms < 2.0
+    Test->>Test: assert speedup >= 5.0
 ```
 
-### 6.2 Failure Path — Threshold Exceeded
+### 5.2 Production Build — Instrumentation Stripped
 
 ```mermaid
 sequenceDiagram
+    participant VP as Viewport.tsx
+    participant Hook as useRaycast.ts
+    participant RE as raycastEngine.ts
+    participant THREE as THREE.Raycaster
+
+    VP->>Hook: useRaycast({ objects, recursive: true })
+    VP->>Hook: raycast(ndcX, ndcY)
+    Hook->>RE: raycast(raycaster, objects, true, isInstrumented=false)
+    Note over RE: import.meta.env.PROD guard — timing code dead-eliminated by Vite
+    RE->>THREE: raycaster.intersectObjects(objects, true)
+    THREE-->>RE: intersections[]
+    RE-->>Hook: intersections[]
+    Hook-->>VP: intersections[]
+    Note over VP: stats = undefined in production
+```
+
+### 5.3 Incremental BVH Rebuild on Brick Add
+
+```mermaid
+sequenceDiagram
+    participant Store as sceneStore.ts
+    participant BVH as bvhManager.ts
+
+    Store->>BVH: registerMesh(newBrickId, newMesh)
+    BVH->>BVH: computeBoundsTree(newMesh.geometry)
+    BVH->>BVH: meshRegistry.set(newBrickId, newMesh)
+    BVH->>BVH: incrementalRebuildCount++
+    alt incrementalRebuildCount >= BVH_MAX_INCREMENTAL_REBUILDS
+        BVH->>BVH: rebuildBvhFull()
+        BVH->>BVH: incrementalRebuildCount = 0
+    end
+    BVH-->>Store: void
+```
+
+### 5.4 CI Failure Path — Threshold Exceeded
+
+```mermaid
+sequenceDiagram
+    participant CI as GitHub Actions
+    participant Vitest as Vitest Runner
     participant Test as raycastLatency.test.ts
-    participant RE as raycastEngine
-    participant PM as performanceMonitor
-    participant CI as CI Runner
+    participant PM as performanceMonitor.ts
 
-    Test->>RE: instrumentedRaycast() x100
-    RE-->>Test: samples (some > 2ms)
-    Test->>PM: aggregateSamples(samples)
-    PM-->>Test: PerformanceReport { p95Ms: 3.2, passed: false }
-    Test->>CI: expect(report.p95Ms).toBeLessThan(2.0) FAIL
-    CI-->>CI: Test FAILED — build blocked
-    Note over CI: Developers see formatted report with p50/p95/p99 breakdown
-```
-
-### 6.3 BVH vs. Naive Speedup Verification
-
-```mermaid
-sequenceDiagram
-    participant Test as raycastLatency.test.ts
-    participant BM as bvhManager
-    participant RE as raycastEngine
-
-    Test->>Test: buildScene(500 bricks)
-
-    Note over Test: Phase 1 — Naive (no BVH)
-    Test->>BM: disposeBvh(meshes)
-    loop 100 raycasts
-        Test->>RE: instrumentedRaycast(raycaster, objects)
-        RE-->>Test: { sample: { bvhEnabled: false } }
-    end
-    Test->>Test: naiveReport = aggregateSamples(naiveSamples)
-
-    Note over Test: Phase 2 — BVH enabled
-    Test->>BM: buildBvh(meshes)
-    loop 100 raycasts
-        Test->>RE: instrumentedRaycast(raycaster, objects)
-        RE-->>Test: { sample: { bvhEnabled: true } }
-    end
-    Test->>Test: bvhReport = aggregateSamples(bvhSamples)
-
-    Test->>Test: speedup = naiveReport.meanMs / bvhReport.meanMs
-    Test->>Test: expect(speedup).toBeGreaterThanOrEqual(5) PASS
-```
-
-### 6.4 BVH Rebuild on Scene Mutation
-
-```mermaid
-sequenceDiagram
-    participant UI as User / PlaceBrick Command
-    participant SS as sceneStore
-    participant BM as bvhManager
-
-    UI->>SS: dispatch(PlaceBrick)
-    SS->>SS: bricks.push(newBrick)
-    SS->>SS: bvhReady = false
-    SS->>BM: rebuildBvhIncremental([newMesh], [], allMeshes)
-    BM->>BM: newMesh.geometry.computeBoundsTree()
-    BM-->>SS: done
-    SS->>SS: bvhReady = true, bvhBuiltAt = Date.now()
+    CI->>Vitest: pnpm test --run performance
+    Vitest->>Test: execute test suite
+    Test->>PM: getStats()
+    PM-->>Test: { p95Ms: 3.2, meetsThreshold: false }
+    Test->>Test: expect(stats.p95Ms).toBeLessThan(2.0) → FAIL
+    Test-->>Vitest: test failure
+    Vitest-->>CI: exit code 1
+    CI->>CI: build FAILED — NFR-PERF-002 threshold exceeded
 ```
 
 ---
 
-## 7. Performance Test Specification
+## 6. Algorithm Specifications
 
-### 7.1 File: `frontend/tests/performance/raycastLatency.test.ts`
+### 6.1 BVH Initialization (Idempotent Monkey-Patch)
+
+```
+function initBvh():
+  if bvhState.isPatched:
+    return  // idempotent guard
+  import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree }
+    from 'three-mesh-bvh'
+  THREE.Mesh.prototype.raycast = acceleratedRaycast
+  THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree
+  THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree
+  bvhState.isPatched = true
+  bvhState.lastFullRebuildAt = performance.now()
+```
+
+### 6.2 Instrumented Raycast Wrapper
+
+```
+function raycast(raycaster, objects, recursive, isInstrumented):
+  if isInstrumented AND NOT import.meta.env.PROD:
+    t0 = performance.now()
+    intersections = raycaster.intersectObjects(objects, recursive)
+    t1 = performance.now()
+    performanceMonitor.record({
+      durationMs: t1 - t0,
+      objectCount: objects.length,
+      hitCount: intersections.length,
+      timestamp: t0
+    })
+    return intersections
+  else:
+    return raycaster.intersectObjects(objects, recursive)
+```
+
+### 6.3 p95 Computation
+
+```
+function computePercentile(samples: number[], p: number): number:
+  sorted = [...samples].sort((a, b) => a - b)
+  index = Math.ceil((p / 100) * sorted.length) - 1
+  return sorted[Math.max(0, index)]
+
+function getStats(): RaycastStats:
+  durations = samples.map(s => s.durationMs)
+  p50 = computePercentile(durations, 50)
+  p95 = computePercentile(durations, 95)
+  p99 = computePercentile(durations, 99)
+  return {
+    sampleCount: samples.length,
+    p50Ms: p50,
+    p95Ms: p95,
+    p99Ms: p99,
+    minMs: Math.min(...durations),
+    maxMs: Math.max(...durations),
+    meanMs: durations.reduce((a,b) => a+b, 0) / durations.length,
+    meetsThreshold: p95 < NFR_PERF_002_THRESHOLD_MS
+  }
+```
+
+### 6.4 Speedup Measurement (Naive vs BVH)
+
+```
+function measureSpeedup(raycaster, objects, sampleCount):
+  // Naive: temporarily unpatch Mesh.prototype.raycast
+  originalRaycast = THREE.Mesh.prototype.raycast
+  THREE.Mesh.prototype.raycast = THREE.Mesh.prototype._originalRaycast
+  naiveTimes = []
+  for i in range(sampleCount):
+    t0 = performance.now()
+    raycaster.intersectObjects(objects, true)
+    naiveTimes.push(performance.now() - t0)
+  naiveP95 = computePercentile(naiveTimes, 95)
+
+  // BVH: restore patch
+  THREE.Mesh.prototype.raycast = originalRaycast
+  bvhTimes = []
+  for i in range(sampleCount):
+    t0 = performance.now()
+    raycaster.intersectObjects(objects, true)
+    bvhTimes.push(performance.now() - t0)
+  bvhP95 = computePercentile(bvhTimes, 95)
+
+  return naiveP95 / bvhP95  // must be >= NFR_PERF_002_SPEEDUP_MIN (5.0)
+```
+
+---
+
+## 7. Test Specification
+
+### 7.1 Test File: `frontend/tests/performance/raycastLatency.test.ts`
 
 ```typescript
-/**
- * NFR-PERF-002: Raycast Latency Enforcement
- *
- * CI-enforced test. Fails the build if p95 raycast time >= 2ms
- * in a 500-brick scene with BVH enabled.
- *
- * Test IDs: T-PERF-PERF-002-01, T-PERF-PERF-002-02
- */
-import { describe, it, expect, beforeAll } from 'vitest';
-import { installBvhRaycast, buildBvh, disposeBvh } from '../../src/engines/bvhManager';
-import { instrumentedRaycast, NFR_PERF_002_THRESHOLD_MS } from '../../src/engines/raycastEngine';
-import { aggregateSamples, formatReport } from '../../src/utils/performanceMonitor';
-import { buildTestScene, randomOrigin, randomDirection } from '../helpers/sceneBuilder';
-
-const BRICK_COUNT = 500;
-const RAYCAST_ITERATIONS = 100;
-const SPEEDUP_MINIMUM = 5;
-
-beforeAll(() => {
-  installBvhRaycast();
-});
+// Vitest + jsdom environment
+// Run with: pnpm test --run performance
 
 describe('NFR-PERF-002: Raycast Latency', () => {
 
-  it('T-PERF-PERF-002-01: p95 raycast time < 2ms in 500-brick scene with BVH', async () => {
-    const { raycaster, meshes } = buildTestScene(BRICK_COUNT);
-    buildBvh(meshes);
+  // T-PERF-PERF-002-01: p95 < 2ms in 500-brick scene
+  it('p95 raycast time is <2ms for 500-brick scene with BVH', async () => {
+    // Setup: build 500-brick scene
+    const scene = buildTestScene(500);
+    bvhManager.initBvh();
+    scene.bricks.forEach(b => bvhManager.registerMesh(b.id, b.mesh));
+    performanceMonitor.reset();
 
-    const samples = [];
-    for (let i = 0; i < RAYCAST_ITERATIONS; i++) {
-      raycaster.set(randomOrigin(i), randomDirection(i));
-      const { sample } = instrumentedRaycast(raycaster, meshes, false);
-      samples.push(sample);
+    // Act: 100 raycasts from random NDC positions
+    const raycaster = new THREE.Raycaster();
+    for (let i = 0; i < NFR_PERF_002_SAMPLE_COUNT; i++) {
+      const ndcX = (Math.random() * 2) - 1;
+      const ndcY = (Math.random() * 2) - 1;
+      raycaster.setFromCamera({ x: ndcX, y: ndcY }, scene.camera);
+      raycastEngine.raycast(raycaster, scene.objects, true, true);
     }
 
-    const report = aggregateSamples(samples, NFR_PERF_002_THRESHOLD_MS);
-    console.log(formatReport(report));
-
-    expect(report.p95Ms).toBeLessThan(NFR_PERF_002_THRESHOLD_MS);
+    // Assert: p95 < 2ms
+    const stats = performanceMonitor.getStats();
+    expect(stats.sampleCount).toBe(100);
+    expect(stats.p95Ms).toBeLessThan(NFR_PERF_002_THRESHOLD_MS);
+    expect(stats.meetsThreshold).toBe(true);
   });
 
-  it('T-PERF-PERF-002-02: BVH speedup >= 5x vs naive at 500 bricks', async () => {
-    const { raycaster, meshes } = buildTestScene(BRICK_COUNT);
+  // T-PERF-PERF-002-02: BVH speedup >= 5x vs naive at 500 bricks
+  it('BVH provides >=5x speedup over naive raycasting at 500 bricks', async () => {
+    const scene = buildTestScene(500);
+    bvhManager.initBvh();
+    scene.bricks.forEach(b => bvhManager.registerMesh(b.id, b.mesh));
 
-    // Phase 1: Naive (no BVH)
-    disposeBvh(meshes);
-    const naiveSamples = [];
-    for (let i = 0; i < RAYCAST_ITERATIONS; i++) {
-      raycaster.set(randomOrigin(i), randomDirection(i));
-      const { sample } = instrumentedRaycast(raycaster, meshes, false);
-      naiveSamples.push(sample);
-    }
-    const naiveReport = aggregateSamples(naiveSamples);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera({ x: 0, y: 0 }, scene.camera);
 
-    // Phase 2: BVH enabled
-    buildBvh(meshes);
-    const bvhSamples = [];
-    for (let i = 0; i < RAYCAST_ITERATIONS; i++) {
-      raycaster.set(randomOrigin(i), randomDirection(i));
-      const { sample } = instrumentedRaycast(raycaster, meshes, false);
-      bvhSamples.push(sample);
-    }
-    const bvhReport = aggregateSamples(bvhSamples);
-
-    const speedup = naiveReport.meanMs / bvhReport.meanMs;
-    console.log(`BVH speedup: ${speedup.toFixed(1)}x (naive: ${naiveReport.meanMs.toFixed(2)}ms, bvh: ${bvhReport.meanMs.toFixed(2)}ms)`);
-
-    expect(speedup).toBeGreaterThanOrEqual(SPEEDUP_MINIMUM);
+    const speedup = measureSpeedup(raycaster, scene.objects, 50);
+    expect(speedup).toBeGreaterThanOrEqual(NFR_PERF_002_SPEEDUP_MIN);
   });
 
+  // T-PERF-PERF-002-03: BVH build time <= 50ms for 500 bricks
+  it('BVH build completes in <=50ms for 500-brick scene', () => {
+    const scene = buildTestScene(500);
+    const t0 = performance.now();
+    bvhManager.initBvh();
+    scene.bricks.forEach(b => bvhManager.registerMesh(b.id, b.mesh));
+    const buildTime = performance.now() - t0;
+    expect(buildTime).toBeLessThanOrEqual(BVH_BUILD_TIMEOUT_MS);
+  });
+
+  // T-PERF-PERF-002-04: Incremental rebuild <= 5ms for single brick
+  it('incremental BVH rebuild completes in <=5ms for single brick mutation', () => {
+    const scene = buildTestScene(500);
+    bvhManager.initBvh();
+    scene.bricks.forEach(b => bvhManager.registerMesh(b.id, b.mesh));
+
+    const newBrick = createTestBrick();
+    const t0 = performance.now();
+    bvhManager.registerMesh(newBrick.id, newBrick.mesh);
+    const rebuildTime = performance.now() - t0;
+    expect(rebuildTime).toBeLessThanOrEqual(5);
+  });
+
+  // T-PERF-PERF-002-05: initBvh is idempotent
+  it('initBvh() is idempotent — calling twice does not double-patch', () => {
+    bvhManager.initBvh();
+    bvhManager.initBvh();
+    const state = bvhManager.getState();
+    expect(state.isPatched).toBe(true);
+    // Verify Mesh.prototype.raycast is acceleratedRaycast (not double-wrapped)
+    expect(THREE.Mesh.prototype.raycast).toBe(acceleratedRaycast);
+  });
+
+  // T-PERF-PERF-002-06: performanceMonitor.reset() clears samples
+  it('performanceMonitor.reset() clears all samples', () => {
+    performanceMonitor.record({ durationMs: 1.0, objectCount: 500, hitCount: 1, timestamp: 0 });
+    performanceMonitor.reset();
+    expect(performanceMonitor.getSamples().length).toBe(0);
+  });
+
+  // T-PERF-PERF-002-07: No timing in production build
+  it('raycastEngine does not record samples when isInstrumented=false', () => {
+    performanceMonitor.reset();
+    const scene = buildTestScene(10);
+    bvhManager.initBvh();
+    scene.bricks.forEach(b => bvhManager.registerMesh(b.id, b.mesh));
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera({ x: 0, y: 0 }, scene.camera);
+    raycastEngine.raycast(raycaster, scene.objects, true, false);
+    expect(performanceMonitor.getSamples().length).toBe(0);
+  });
+
+  // T-PERF-PERF-002-08: p95 computation correctness
+  it('p95 computation is correct for known sample set', () => {
+    performanceMonitor.reset();
+    // 100 samples: 95 at 1ms, 5 at 10ms → p95 = 1ms, p99 = 10ms
+    for (let i = 0; i < 95; i++) {
+      performanceMonitor.record({ durationMs: 1.0, objectCount: 500, hitCount: 0, timestamp: i });
+    }
+    for (let i = 0; i < 5; i++) {
+      performanceMonitor.record({ durationMs: 10.0, objectCount: 500, hitCount: 0, timestamp: 95 + i });
+    }
+    const stats = performanceMonitor.getStats();
+    expect(stats.p95Ms).toBeLessThan(2.0);
+    expect(stats.p99Ms).toBeGreaterThan(5.0);
+    expect(stats.meetsThreshold).toBe(true);
+  });
 });
 ```
 
-### 7.2 Test Helper: `frontend/tests/helpers/sceneBuilder.ts`
+### 7.2 Test Case Mapping
 
-```typescript
-import { Scene, Raycaster, Mesh, Vector3 } from 'three';
-
-/**
- * Builds a deterministic test scene with N bricks.
- * Uses a fixed seed for reproducible geometry.
- * Bricks are placed in a grid pattern to simulate a real scene.
- */
-export function buildTestScene(brickCount: number): {
-  scene: Scene;
-  raycaster: Raycaster;
-  meshes: Mesh[];
-};
-
-/**
- * Returns a deterministic ray origin for iteration i.
- * Distributes origins across the scene bounding box.
- */
-export function randomOrigin(i: number): Vector3;
-
-/**
- * Returns a deterministic ray direction for iteration i.
- * Ensures rays traverse the scene (not parallel to bricks).
- */
-export function randomDirection(i: number): Vector3;
-```
+| Test ID | Description | Acceptance Criterion |
+|---------|-------------|---------------------|
+| T-PERF-PERF-002-01 | p95 raycast < 2ms, 500 bricks, 100 samples | `stats.p95Ms < 2.0` |
+| T-PERF-PERF-002-02 | BVH speedup ≥ 5× vs naive | `speedup >= 5.0` |
+| T-PERF-PERF-002-03 | BVH build ≤ 50ms for 500 bricks | `buildTime <= 50` |
+| T-PERF-PERF-002-04 | Incremental rebuild ≤ 5ms | `rebuildTime <= 5` |
+| T-PERF-PERF-002-05 | `initBvh()` idempotent | No double-patch |
+| T-PERF-PERF-002-06 | `reset()` clears samples | `samples.length === 0` |
+| T-PERF-PERF-002-07 | No timing when `isInstrumented=false` | `samples.length === 0` |
+| T-PERF-PERF-002-08 | p95 computation correctness | Known distribution validates |
 
 ---
 
@@ -455,187 +577,151 @@ export function randomDirection(i: number): Vector3;
 
 | Error Condition | Detection | Response | Severity |
 |----------------|-----------|----------|----------|
-| BVH not built when raycast called | `mesh.geometry.boundsTree === undefined` | Log warning, fall back to naive raycast, mark `bvhEnabled: false` in sample | WARN |
-| `performance.now()` unavailable | `typeof performance === 'undefined'` | Use `Date.now()` fallback; log once at startup | WARN |
-| Scene has 0 meshes | `meshes.length === 0` | Return empty intersections immediately, skip timing | INFO |
-| BVH build throws (malformed geometry) | try/catch in `buildBvh` | Log error, set `bvhReady = false`, continue without BVH | ERROR |
-| p95 threshold exceeded in CI | Test assertion failure | Vitest exits non-zero; CI pipeline blocks merge | FATAL (CI) |
-| Incremental rebuild race condition | Mutex flag in sceneStore | Queue rebuild; skip if already rebuilding | WARN |
+| `three-mesh-bvh` not installed | `import` throws at module load | Throw `Error('three-mesh-bvh is required for NFR-PERF-002. Run: pnpm add three-mesh-bvh')` | Fatal |
+| `initBvh()` not called before raycast | `bvhState.isPatched === false` at raycast time | `console.warn('[NFR-PERF-002] BVH not initialized — falling back to naive raycast')` | Warning |
+| `registerMesh()` called with duplicate brickId | `meshRegistry.has(brickId)` | Overwrite silently; `console.warn('[NFR-PERF-002] Duplicate brickId registered: ' + brickId)` | Warning |
+| `deregisterMesh()` called with unknown brickId | `!meshRegistry.has(brickId)` | No-op; `console.warn('[NFR-PERF-002] Unknown brickId deregistered: ' + brickId)` | Warning |
+| BVH build exceeds `BVH_BUILD_TIMEOUT_MS` | `performance.now()` delta > 50ms | `console.warn('[NFR-PERF-002] BVH build took ' + elapsed + 'ms — exceeds 50ms budget')` | Warning |
+| `getStats()` called with zero samples | `samples.length === 0` | Return `{ sampleCount: 0, p50Ms: 0, p95Ms: 0, p99Ms: 0, minMs: 0, maxMs: 0, meanMs: 0, meetsThreshold: true }` | Info |
+| `performance.now()` unavailable (SSR/Node) | `typeof performance === 'undefined'` | Skip instrumentation; `console.warn('[NFR-PERF-002] performance.now() unavailable — timing disabled')` | Warning |
 
 ---
 
 ## 9. Security Considerations
 
-| Concern | Risk | Mitigation |
-|---------|------|------------|
-| Timing side-channel | `performance.now()` exposes high-resolution timing | Instrumentation is **test/dev only** — stripped in production via `import.meta.env.PROD` guard; no timing data exposed to end users |
-| BVH memory exhaustion | Malicious scene with extreme brick count | Scene is bounded by UI limits (max 500 bricks per NFR-PERF-002 scope); BVH memory is proportional to brick count |
-| Prototype pollution via `three-mesh-bvh` monkey-patch | `installBvhRaycast()` mutates `Mesh.prototype` | Called once at app init; idempotent; no user-controlled input reaches the patch |
-| Test data injection | Test helper `buildTestScene` uses deterministic seed | No external input; seed is a compile-time constant |
+### 9.1 Timing Side-Channel
+
+**Risk:** High-resolution `performance.now()` timing data could leak information about scene geometry to a malicious script.
+
+**Mitigation:**
+- Timing instrumentation is **only active in non-production builds** (`!import.meta.env.PROD` guard).
+- Vite dead-code-eliminates the timing branch in production builds — zero timing data exposed to end users.
+- `performanceMonitor` state is module-local (not exposed on `window` or any global).
+
+### 9.2 Memory Exhaustion via Sample Buffer
+
+**Risk:** Unbounded `samples` array could grow indefinitely in long-running test sessions.
+
+**Mitigation:**
+- `performanceMonitor` enforces a maximum buffer size of `MAX_SAMPLE_BUFFER = 10_000`.
+- When the buffer is full, oldest samples are evicted (ring buffer semantics).
+- `reset()` is called between test runs to prevent cross-contamination.
+
+### 9.3 Prototype Pollution via Monkey-Patch
+
+**Risk:** Monkey-patching `Mesh.prototype.raycast` could be exploited if `acceleratedRaycast` is replaced by a malicious script.
+
+**Mitigation:**
+- `initBvh()` is idempotent — once patched, subsequent calls are no-ops.
+- The original `Mesh.prototype.raycast` is stored as `Mesh.prototype._originalRaycast` before patching, enabling safe restoration.
+- `Object.freeze` is applied to `bvhState` after initialization to prevent external mutation.
+
+### 9.4 brickId Validation
+
+**Risk:** Malformed brickId strings could cause unexpected behavior in `meshRegistry`.
+
+**Mitigation:**
+- `registerMesh()` validates `brickId` matches UUID v4 pattern: `/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i`.
+- Invalid brickIds are rejected with `console.warn` and the mesh is not registered.
 
 ---
 
-## 10. Implementation Notes for Coding Agent
+## 10. Performance Budget
 
-### 10.1 BVH Installation (idempotent)
+| Metric | Target | Measurement Method |
+|--------|--------|-------------------|
+| Raycast p95 latency (500 bricks) | < 2 ms | `performance.now()` in `raycastLatency.test.ts` |
+| Raycast p50 latency (500 bricks) | < 1 ms | Same |
+| BVH speedup vs naive (500 bricks) | ≥ 5× | `measureSpeedup()` in test |
+| BVH full build time (500 bricks) | ≤ 50 ms | `performance.now()` in test |
+| Incremental rebuild (1 brick) | ≤ 5 ms | `performance.now()` in test |
+| Production bundle overhead | 0 ms | Dead-code elimination via Vite |
+| Memory overhead (sample buffer) | ≤ 1 MB | Ring buffer capped at 10,000 samples |
+
+---
+
+## 11. CI Integration
+
+### 11.1 Vitest Configuration
 
 ```typescript
-// bvhManager.ts — call once at app entry point (main.tsx)
-import { acceleratedRaycast } from 'three-mesh-bvh';
-import { Mesh } from 'three';
-
-let installed = false;
-export function installBvhRaycast(): void {
-  if (installed) return;
-  Mesh.prototype.raycast = acceleratedRaycast;
-  installed = true;
-}
-```
-
-### 10.2 Production Guard for Instrumentation
-
-```typescript
-// raycastEngine.ts
-const NOOP_SAMPLE: RaycastSample = {
-  durationMs: 0, brickCount: 0, bvhEnabled: true, timestamp: 0,
-};
-
-export function instrumentedRaycast(
-  raycaster: Raycaster,
-  objects: Object3D[],
-  recursive = false
-): { intersections: Intersection[]; sample: RaycastSample } {
-  if (import.meta.env.PROD) {
-    // Zero overhead in production — timing stripped by Vite tree-shaking
-    return { intersections: raycaster.intersectObjects(objects, recursive), sample: NOOP_SAMPLE };
+// vitest.config.ts — add performance test include
+export default defineConfig({
+  test: {
+    include: [
+      'tests/**/*.test.ts',
+      'tests/performance/**/*.test.ts'  // NFR-PERF-002
+    ],
+    environment: 'jsdom',
+    globals: true
   }
-
-  const t0 = performance.now();
-  const intersections = raycaster.intersectObjects(objects, recursive);
-  const t1 = performance.now();
-
-  return {
-    intersections,
-    sample: {
-      durationMs: t1 - t0,
-      brickCount: objects.length,
-      bvhEnabled: (objects[0] as Mesh)?.geometry?.boundsTree != null,
-      timestamp: Date.now(),
-    },
-  };
-}
+});
 ```
 
-### 10.3 p95 Computation
-
-```typescript
-// performanceMonitor.ts
-export function computePercentile(sortedSamples: number[], p: number): number {
-  if (sortedSamples.length === 0) return 0;
-  const idx = Math.ceil((p / 100) * sortedSamples.length) - 1;
-  return sortedSamples[Math.max(0, idx)];
-}
-
-export function aggregateSamples(
-  samples: RaycastSample[],
-  threshold = NFR_PERF_002_THRESHOLD_MS
-): PerformanceReport {
-  const durations = samples.map(s => s.durationMs).sort((a, b) => a - b);
-  const mean = durations.reduce((a, b) => a + b, 0) / durations.length;
-  const p95 = computePercentile(durations, 95);
-  return {
-    sampleCount: samples.length,
-    minMs: durations[0],
-    maxMs: durations[durations.length - 1],
-    meanMs: mean,
-    p50Ms: computePercentile(durations, 50),
-    p95Ms: p95,
-    p99Ms: computePercentile(durations, 99),
-    bvhEnabled: samples[0]?.bvhEnabled ?? false,
-    brickCount: samples[0]?.brickCount ?? 0,
-    passed: p95 < threshold,
-  };
-}
-```
-
-### 10.4 Vitest Configuration
-
-```typescript
-// vitest.config.ts — ensure jsdom environment for performance.now()
-test: {
-  environment: 'jsdom',
-  include: ['tests/**/*.test.ts'],
-  testTimeout: 30_000,  // 30s for performance tests
-}
-```
-
-### 10.5 CI Integration
+### 11.2 GitHub Actions Integration
 
 ```yaml
-# .github/workflows/ci.yml
+# .github/workflows/ci.yml — performance gate step
 - name: Run performance tests (NFR-PERF-002)
-  run: npx vitest run tests/performance/raycastLatency.test.ts
-  working-directory: frontend
+  run: pnpm test --run --reporter=verbose tests/performance/
   env:
     NODE_ENV: test
+  # Fails build if p95 raycast > 2ms
 ```
 
-### 10.6 Dependency Prerequisite
+### 11.3 Failure Reporting
 
-NFR-PERF-002 depends on FR-SCENE-003 (Issue #9) for `three-mesh-bvh` being present in `package.json`. The coding agent **MUST** verify `three-mesh-bvh` is listed as a dependency before implementing `bvhManager.ts`.
+When the CI step fails, Vitest outputs:
+```
+✗ NFR-PERF-002: Raycast Latency > p95 raycast time is <2ms for 500-brick scene with BVH
+  AssertionError: expected 3.2 to be less than 2
+  p95: 3.2ms | p50: 1.1ms | p99: 8.4ms | samples: 100
+```
 
----
-
-## 11. Bundle and Runtime Impact
-
-| Metric | Target | Notes |
-|--------|--------|-------|
-| `bvhManager.ts` bundle size | <= 2 KB (gzip) | Thin wrapper; `three-mesh-bvh` is already a scene dep |
-| `raycastEngine.ts` bundle size | <= 1 KB (gzip) | Instrumentation stripped in prod |
-| `performanceMonitor.ts` delta | <= 0.5 KB (gzip) | Adds p95 helper to existing scaffold |
-| BVH build time (500 bricks) | <= 50 ms | One-time cost at scene load; acceptable |
-| BVH memory overhead (500 bricks) | <= 5 MB | Proportional to geometry complexity |
-| Incremental rebuild (1 brick add) | <= 5 ms | Only affected geometry recomputed |
+This provides immediate diagnostic context for the developer.
 
 ---
 
-## 12. Open Questions
+## 12. Implementation Notes for Coding Agent
 
-| # | Question | Impact | Owner |
-|---|----------|--------|-------|
-| OQ-1 | Should the p95 threshold be configurable via env var (`VITE_RAYCAST_THRESHOLD_MS`) or hardcoded? | Hardcoded prevents accidental relaxation; env var allows per-environment tuning | Product / Tech Lead |
-| OQ-2 | Should the performance test run on every PR or only on `main` merges? | Every PR catches regressions early but adds ~5s to CI | DevOps / Tech Lead |
-| OQ-3 | Is `jsdom` sufficient for `performance.now()` accuracy, or should tests run in a real browser via Playwright? | jsdom is accurate enough for ms-level thresholds; Playwright adds complexity | QA Lead |
-| OQ-4 | Should BVH be rebuilt synchronously or deferred to a Web Worker? | Sync rebuild blocks main thread ~50ms at 500 bricks; Worker adds complexity | Tech Lead |
+1. **Dependency check first:** Verify `three-mesh-bvh` is in `package.json` before implementing. If missing, add it: `pnpm add three-mesh-bvh`.
 
----
+2. **`bvhManager.ts` extends FR-SCENE-003:** The BVH initialization logic from FR-SCENE-003 (#9) is the foundation. NFR-PERF-002 adds `registerMesh()`, `deregisterMesh()`, `rebuildBvhIncremental()`, and `getState()` to the existing module.
 
-## 13. Test Case Registry
+3. **`performanceMonitor.ts` is test-only:** Import it only in non-production code paths. Use `import.meta.env.PROD` guards consistently.
 
-| Test ID | Description | Input | Expected Output | Threshold |
-|---------|-------------|-------|-----------------|----------|
-| T-PERF-PERF-002-01 | p95 raycast latency with BVH, 500 bricks | 500 bricks, BVH built, 100 raycasts | p95 < 2 ms | 2 ms |
-| T-PERF-PERF-002-02 | BVH speedup vs naive, 500 bricks | 500 bricks, naive then BVH, 100 raycasts each | speedup >= 5x | 5x |
-| T-PERF-PERF-002-03 | BVH not built — graceful fallback | 500 bricks, no BVH | Returns intersections, logs WARN, `bvhEnabled: false` | N/A |
-| T-PERF-PERF-002-04 | Empty scene — no crash | 0 bricks | Empty intersections, no error | N/A |
-| T-PERF-PERF-002-05 | `performance.now()` unavailable — fallback | Mock `performance` as undefined | Uses `Date.now()`, logs once | N/A |
-| T-PERF-PERF-002-06 | BVH build on malformed geometry | Mesh with empty geometry | Logs ERROR, `bvhReady = false`, no crash | N/A |
-| T-PERF-PERF-002-07 | Incremental BVH rebuild after brick add | 499 bricks + 1 add | BVH rebuilt in <= 5 ms | 5 ms |
-| T-PERF-PERF-002-08 | p95 computation correctness | 100 samples [1..100] ms | p95 = 95 ms | N/A |
+4. **`raycastLatency.test.ts` is the source of truth for CI:** The test file path `frontend/tests/performance/raycastLatency.test.ts` must match the Vitest config include pattern.
+
+5. **`buildTestScene(n)` helper:** The test requires a helper function that creates `n` `THREE.Mesh` objects with `BoxGeometry` arranged in a grid. This helper lives in `frontend/tests/helpers/sceneBuilder.ts`.
+
+6. **`measureSpeedup()` helper:** Must temporarily unpatch `Mesh.prototype.raycast` to measure naive performance, then restore the BVH patch. Use `_originalRaycast` backup.
+
+7. **Ring buffer for `performanceMonitor`:** Use a circular array with `head` and `tail` pointers. Do not use `Array.shift()` (O(n) cost).
+
+8. **jsdom `performance.now()` accuracy:** jsdom provides `performance.now()` with ~1ms resolution. This is sufficient for the 2ms threshold. Do not use `Date.now()` (lower resolution).
 
 ---
 
-## 14. Alignment with Technical Architecture
+## 13. Open Questions
 
-This LLD is consistent with the LegoBuilder Technical Architecture:
-
-- **Frontend-only SPA**: All modules are in `frontend/src/`; no backend changes required.
-- **Three.js / React Three Fiber**: `bvhManager.ts` and `raycastEngine.ts` operate on Three.js primitives (`Mesh`, `Raycaster`).
-- **Zustand stores**: `sceneStore` is extended with `BvhState` slice following the existing store pattern.
-- **Vitest**: Performance tests use the existing Vitest setup; no new test framework introduced.
-- **Vite**: `import.meta.env.PROD` guard leverages Vite's built-in env system for dead-code elimination.
-- **FR-SCENE-003 dependency**: `three-mesh-bvh` is assumed present per Issue #9; coding agent must verify.
+| ID | Question | Impact | Owner |
+|----|----------|--------|-------|
+| OQ-1 | Does FR-SCENE-003 (#9) already export `bvhManager.ts` as a module, or does NFR-PERF-002 need to create it from scratch? | Determines whether this is an extension or a new module | Human reviewer |
+| OQ-2 | Is `three-mesh-bvh` already in `package.json`? | If not, coding agent must add it | Human reviewer |
+| OQ-3 | Should the performance test run in every CI push or only on PRs targeting `main`? | Affects CI workflow configuration | Human reviewer |
+| OQ-4 | Is jsdom `performance.now()` resolution sufficient, or should the test use Node.js `perf_hooks.performance`? | Affects test environment configuration | Human reviewer |
 
 ---
 
-*Generated by Spectra Design Agent — Gate 6a approval required before implementation begins.*
+## 14. Assumptions
+
+1. `three-mesh-bvh` is available as a project dependency (referenced in FR-SCENE-003 technical notes).
+2. The existing Vitest setup supports `jsdom` environment with `performance.now()` available.
+3. `bvhManager.ts` from FR-SCENE-003 is the canonical location for BVH lifecycle management.
+4. The 500-brick scene in tests uses `BoxGeometry` (standard LEGO brick shape) — not complex custom geometry.
+5. Raycasts in the test use random NDC coordinates to simulate realistic user interaction patterns.
+6. The `import.meta.env.PROD` guard is the standard Vite mechanism for dead-code elimination.
+
+---
+
+*Spectra-Agent: design-agent | Spectra-FRs: NFR-PERF-002, FR-SCENE-003 | Spectra-Tests: T-PERF-PERF-002-01 | Gate: pending*
