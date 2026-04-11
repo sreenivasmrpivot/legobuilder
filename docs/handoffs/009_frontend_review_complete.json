@@ -2,11 +2,11 @@
   "handoff_id": "009_frontend_review_complete",
   "from_agent": "frontend-review",
   "to_agent": "frontend-coding",
-  "timestamp": "2026-04-11T07:35:54Z",
+  "timestamp": "2026-04-11T14:28:13Z",
   "status": "changes_requested",
   "app_id": "app-legobuilder-20260410",
   "target_repo": "sreenivasmrpivot/legobuilder",
-  "summary": "Frontend review of PR #77 (NFR-REL-001 Auto-Save Crash Durability) completed with CHANGES REQUESTED verdict. 1 high-severity blocking issue found: useAutoSave.ts passes empty bricks array and hardcoded data to every auto-save instead of reading from sceneStore, defeating the entire auto-save feature. 2 medium issues: (M1) test files use inline implementations instead of importing real source code, (M2) silent error swallowing in persistenceService.ts. 5 low suggestions including package.json scope creep with breaking major version bumps. Architecture, idb usage, atomic transactions, crash detection, accessibility, and data-testid attributes all pass review.",
+  "summary": "Authoritative Gate 8 frontend review of PR #77 (NFR-REL-001 Auto-Save Crash Durability) completed with CHANGES REQUESTED verdict. 2 blocking issues: (B1) useAutoSave.ts passes hardcoded empty bricks array and placeholder data to every auto-save instead of reading from sceneStore — the entire auto-save feature is a no-op, E2E tests T-BE-REL-001-01 and T-BE-REL-001-02 will fail; (B2) package.json has unscoped breaking changes including removed dependencies (immer, three-mesh-bvh, @vitest/coverage-v8), major version bumps (zustand v4→v5, vite v5→v6), removed scripts, and package name change. 3 medium issues: (M1) all 4 test files use inline stubs instead of importing real production code, (M2) silent error swallowing in persistenceService.ts catch block, (M3) multiple empty catch blocks in persistenceStore.ts. Architecture, idb usage, atomic transactions, crash detection, accessibility, and data-testid attributes all pass review.",
   "workflow_state": {
     "current_phase": "frontend_review_complete",
     "workflow_type": "pure_greenfield",
@@ -19,77 +19,98 @@
   "findings": {
     "blocking": [
       {
-        "id": "H1",
+        "id": "B1",
         "severity": "high",
         "file": "frontend/src/hooks/useAutoSave.ts",
-        "lines": "40-47",
-        "title": "Hardcoded empty data in auto-save interval",
+        "lines": "42-46",
+        "title": "Hardcoded empty data in auto-save interval — feature is a no-op",
         "description": "Hook passes empty bricks array [], hardcoded camera state, and placeholder metadata to triggerAutoSave(). Never reads from sceneStore. Every auto-save persists an empty scene.",
-        "impact": "E2E tests T-BE-REL-001-01 and T-BE-REL-001-02 will fail. Defeats the entire auto-save feature.",
-        "fix": "Read actual scene state from sceneStore using useSceneStore selectors."
+        "impact": "E2E tests T-BE-REL-001-01 and T-BE-REL-001-02 will fail. The entire auto-save feature is non-functional.",
+        "fix": "Read actual scene state from sceneStore using useSceneStore.getState() inside the interval callback: const { bricks, cameraState, sceneMetadata } = useSceneStore.getState();"
+      },
+      {
+        "id": "B2",
+        "severity": "high",
+        "file": "frontend/package.json",
+        "title": "Unscoped breaking changes in package.json",
+        "description": "Changes beyond NFR-REL-001 scope: package name changed (legobuilder → legobuilder-frontend), removed immer/three-mesh-bvh/@vitest/coverage-v8, major bumps zustand v4→v5 and vite v5→v6, removed scripts (lint:fix, format, format:check, type-check, test:e2e:ui).",
+        "impact": "May break CI/CD, Docker, workspace refs, scene store, collision detection, coverage reporting, and developer workflow.",
+        "fix": "Revert package.json to main branch version, only add idb to dependencies and fake-indexeddb + globals to devDependencies."
       }
     ],
     "medium": [
       {
         "id": "M1",
         "severity": "medium",
-        "files": ["frontend/tests/component/ResumePrompt.test.tsx", "frontend/tests/unit/useAutoSave.test.ts"],
-        "title": "Tests use inline implementations instead of actual source",
-        "description": "Both test files define their own inline implementations rather than importing the actual source. Tests validate the contract but not the shipped code.",
-        "fix": "Update imports to use real implementations."
+        "files": ["frontend/tests/component/ResumePrompt.test.tsx", "frontend/tests/unit/useAutoSave.test.ts", "frontend/tests/unit/crashRecoveryService.test.ts", "frontend/tests/unit/persistenceService.test.ts"],
+        "title": "All test files use inline stubs instead of production imports",
+        "description": "All 4 test files define their own inline implementations rather than importing the actual production source. Tests validate the contract but provide zero coverage of shipped code.",
+        "fix": "Update imports to use real production modules. Use resetDBPromise() from dbSchema.ts for test isolation."
       },
       {
         "id": "M2",
         "severity": "medium",
         "file": "frontend/src/services/persistenceService.ts",
-        "lines": "74-76",
+        "lines": "80-82",
         "title": "Silent error swallowing in meta read",
-        "description": "Empty catch block when reading existing meta silently resets saveCount to 1 on any error.",
-        "fix": "Add console.warn with error details."
+        "description": "Empty catch block when reading existing meta silently resets saveCount to 1 on any error, not just first save.",
+        "fix": "Add console.warn('[persistenceService] Could not read existing meta:', err);"
+      },
+      {
+        "id": "M3",
+        "severity": "medium",
+        "file": "frontend/src/stores/persistenceStore.ts",
+        "lines": "100, 110, 122, 133",
+        "title": "Multiple empty catch blocks need console.warn",
+        "description": "Four empty catch blocks in markSessionClosed, checkForCrashRecovery, resumeSession, and discardSession silently swallow errors.",
+        "fix": "Add console.warn with error details to each catch block."
       }
     ],
     "low": [
       {
         "id": "L1",
         "file": "frontend/src/services/dbSchema.ts",
-        "title": "No closeDB() for HMR cleanup"
+        "title": "No closeDB() for HMR cleanup alongside resetDBPromise()"
       },
       {
         "id": "L2",
         "file": "frontend/src/hooks/useAutoSave.ts",
-        "title": "markSessionClosed async in sync beforeunload"
+        "title": "markSessionClosed is async in sync beforeunload — consider localStorage fallback"
       },
       {
         "id": "L3",
-        "file": "frontend/src/stores/persistenceStore.ts",
-        "title": "Multiple empty catch blocks need console.warn"
+        "file": "frontend/src/components/ResumePrompt/ResumePrompt.tsx",
+        "title": "No focus trap in modal — track as separate WCAG accessibility issue"
       },
       {
         "id": "L4",
-        "file": "frontend/src/components/ResumePrompt/ResumePrompt.tsx",
-        "title": "No focus trap in modal"
+        "file": "frontend/src/services/persistenceService.ts",
+        "title": "purgeSession() uses raw IDBKeyRange.only() — inconsistent with idb wrapper usage"
       },
       {
         "id": "L5",
-        "file": "frontend/package.json",
-        "title": "Scope creep: breaking major version bumps, removed deps and scripts"
+        "file": "frontend/src/services/persistenceService.ts",
+        "title": "existingMeta read is outside the atomic transaction (TOCTOU on saveCount)"
       }
     ]
   },
   "passing_checks": [
-    "idb library used (not raw IndexedDB)",
+    "idb library used (not raw IndexedDB) per LLD Section 13",
     "Atomic dual-store transaction in saveSnapshot()",
-    "PersistenceError class with error codes",
-    "data-testid attributes match E2E selectors",
-    "Accessible modal (role, aria-modal, aria-labelledby)",
-    "beforeunload listener with cleanup",
-    "Overlap guard prevents concurrent saves",
+    "PersistenceError class with typed error codes",
+    "isValidSnapshot() validates bricks array + schemaVersion bounds",
+    "data-testid attributes match E2E selectors (resume-prompt, resume-prompt-brick-count, resume-btn, discard-btn)",
+    "Accessible modal (role=dialog, aria-modal=true, aria-labelledby)",
+    "beforeunload listener registered and cleaned up on unmount",
+    "Overlap guard (isSavingRef) prevents concurrent saves",
     "fake-indexeddb in devDependencies",
-    "All 10 test IDs from LLD Section 12 covered"
+    "All 10 test IDs from LLD Section 12 covered",
+    "Clean module layering: dbSchema → persistenceService → crashRecoveryService → store → hook → component",
+    "Singleton DB pattern with resetDBPromise() for test isolation"
   ],
   "test_alignment": {
-    "T-BE-REL-001-01": "warn_h1",
-    "T-BE-REL-001-02": "warn_h1",
+    "T-BE-REL-001-01": "fail_b1",
+    "T-BE-REL-001-02": "fail_b1",
     "T-UNIT-REL-001-01": "pass",
     "T-UNIT-REL-001-02": "pass",
     "T-UNIT-REL-001-03": "pass",
@@ -101,31 +122,37 @@
   },
   "human_review_required": [
     {
-      "item": "Gate 8 — Confirm H1 fix (useAutoSave reads from sceneStore)",
+      "item": "Gate 8 — Confirm B1 fix (useAutoSave reads actual scene state from sceneStore)",
       "severity": "high"
     },
     {
-      "item": "Confirm package.json scope changes are intentional (L5)",
-      "severity": "medium"
+      "item": "Gate 8 — Confirm B2 fix (package.json reverted, only idb/fake-indexeddb added)",
+      "severity": "high"
     },
     {
-      "item": "Verify test imports updated to real implementations (M1)",
+      "item": "Verify test imports updated to real production modules (M1)",
       "severity": "medium"
     }
   ],
   "next_agent_context": {
     "recommended_actions": [
-      "Fix H1: Update useAutoSave.ts to read bricks, cameraState, sceneMetadata from sceneStore",
-      "Fix M1: Update ResumePrompt.test.tsx and useAutoSave.test.ts to import real implementations",
-      "Fix M2: Add console.warn to catch block in persistenceService.ts line 74",
-      "Address L5: Revert package.json changes that are out of scope, or confirm they are intentional",
-      "Re-run unit tests after fixes"
+      "Fix B1: Update useAutoSave.ts to read bricks, cameraState, sceneMetadata from sceneStore using useSceneStore.getState()",
+      "Fix B2: Revert package.json to main branch version, only add idb (dep) and fake-indexeddb + globals (devDeps)",
+      "Fix M1: Update all 4 test files to import real production modules instead of inline stubs",
+      "Fix M2: Add console.warn to catch block in persistenceService.ts line 80",
+      "Fix M3: Add console.warn to empty catch blocks in persistenceStore.ts lines 100, 110, 122, 133",
+      "Re-run unit tests after fixes: npx vitest run frontend/tests/unit",
+      "Re-run component tests: npx vitest run frontend/tests/component"
     ],
     "files_to_modify": [
       "frontend/src/hooks/useAutoSave.ts",
+      "frontend/package.json",
       "frontend/src/services/persistenceService.ts",
+      "frontend/src/stores/persistenceStore.ts",
       "frontend/tests/component/ResumePrompt.test.tsx",
-      "frontend/tests/unit/useAutoSave.test.ts"
+      "frontend/tests/unit/useAutoSave.test.ts",
+      "frontend/tests/unit/crashRecoveryService.test.ts",
+      "frontend/tests/unit/persistenceService.test.ts"
     ]
   }
 }
