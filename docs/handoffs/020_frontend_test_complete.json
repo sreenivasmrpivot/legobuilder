@@ -1,0 +1,144 @@
+{
+  "handoff_id": "020_frontend_test_complete",
+  "from_agent": "frontend-test",
+  "to_agent": "frontend-coding",
+  "timestamp": "2026-04-11T07:04:27Z",
+  "status": "complete",
+  "event": {
+    "event_id": "evt-frontend-test-nfr-rel-001",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "app-legobuilder-20260410",
+    "causation_id": "006_design_complete"
+  },
+  "state_ref": {
+    "request_id": "5df0402d-87bf-4c3e-a5d0-c870cf53e6cd",
+    "workflow_state_uri": "docs/handoffs/020_frontend_test_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "path": "sreenivasmrpivot/legobuilder"
+  },
+  "artifacts": [
+    {
+      "name": "persistenceService unit tests",
+      "path": "frontend/tests/unit/persistenceService.test.ts",
+      "type": "test",
+      "description": "T-BE-REL-001-03/04: IndexedDB atomic write, schema validation, private-mode fallback"
+    },
+    {
+      "name": "crashRecoveryService unit tests",
+      "path": "frontend/tests/unit/crashRecoveryService.test.ts",
+      "type": "test",
+      "description": "T-BE-REL-001-05/06: Crash detection (active session) and graceful close (closed session)"
+    },
+    {
+      "name": "useAutoSave hook unit tests",
+      "path": "frontend/tests/unit/useAutoSave.test.ts",
+      "type": "test",
+      "description": "T-BE-REL-001-07/08: 30s interval trigger, beforeunload graceful-close marker"
+    },
+    {
+      "name": "persistenceStore Zustand unit tests",
+      "path": "frontend/tests/unit/persistenceStore.test.ts",
+      "type": "test",
+      "description": "T-BE-REL-001-09: State machine transitions (idle/saving/saved/error, recovery lifecycle)"
+    },
+    {
+      "name": "ResumePrompt component unit tests",
+      "path": "frontend/tests/unit/ResumePrompt.test.tsx",
+      "type": "test",
+      "description": "T-BE-REL-001-10: ARIA role=dialog, aria-modal, aria-labelledby, focus, keyboard, interactions"
+    },
+    {
+      "name": "E2E crash recovery Playwright tests",
+      "path": "frontend/tests/e2e/auto-save-crash-recovery.spec.ts",
+      "type": "test",
+      "description": "T-BE-REL-001-01/02: Full crash-and-recovery cycle and graceful-close no-prompt"
+    },
+    {
+      "name": "Persistence layer TypeScript types",
+      "path": "frontend/tests/unit/persistenceService.types.ts",
+      "type": "types",
+      "description": "Shared types for IndexedDB schema, store interface, and service contracts"
+    }
+  ],
+  "summary": {
+    "work_completed": "Wrote 10 test cases (2 E2E Playwright + 8 unit Vitest) for NFR-REL-001 auto-save crash durability. Tests cover the full LLD Section 12 test mapping: IndexedDB atomic writes, crash detection, graceful close, useAutoSave interval/beforeunload, Zustand store state machine, and ResumePrompt ARIA/accessibility.",
+    "key_findings": [
+      "Tests are contract-driven: written against LLD interfaces before implementation exists",
+      "fake-indexeddb required as devDependency for unit tests (no real browser needed)",
+      "@testing-library/react and @testing-library/user-event required for ResumePrompt tests",
+      "E2E tests use Playwright persistent context to preserve IndexedDB across page loads",
+      "Playwright clock.install() + clock.fastForward() used to control 30s auto-save interval"
+    ],
+    "metrics": {
+      "test_files": 6,
+      "unit_tests": 8,
+      "e2e_tests": 2,
+      "total_test_cases": 10,
+      "test_ids_covered": "T-BE-REL-001-01 through T-BE-REL-001-10"
+    }
+  },
+  "human_review_required": [
+    {
+      "item": "fake-indexeddb devDependency",
+      "reason": "Package must be added to frontend/package.json before unit tests can run: npm install --save-dev fake-indexeddb",
+      "severity": "high"
+    },
+    {
+      "item": "@testing-library/react and @testing-library/user-event devDependencies",
+      "reason": "Required for ResumePrompt.test.tsx — verify these are already in package.json or add them",
+      "severity": "medium"
+    },
+    {
+      "item": "data-testid selectors in E2E tests",
+      "reason": "E2E tests use data-testid='brick-catalog-item', 'scene-viewport', 'scene-brick' — coding agent must add these attributes to the real components",
+      "severity": "medium"
+    },
+    {
+      "item": "Playwright clock.install() API version",
+      "reason": "page.clock.install() requires Playwright >= 1.45. Verify the installed version in package.json supports this API.",
+      "severity": "low"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Add fake-indexeddb to frontend/package.json devDependencies",
+      "Implement src/services/persistenceService.ts matching the IPersistenceService interface in tests/unit/persistenceService.types.ts",
+      "Implement src/services/crashRecoveryService.ts matching the ICrashRecoveryService interface",
+      "Implement src/stores/persistenceStore.ts as a Zustand store matching the PersistenceStoreState interface",
+      "Implement src/hooks/useAutoSave.ts matching the contract tested in useAutoSave.test.ts",
+      "Implement src/components/ui/ResumePrompt.tsx matching the contract tested in ResumePrompt.test.tsx",
+      "Add data-testid attributes to scene components for E2E test selectors",
+      "Run vitest to verify all unit tests pass against the implementation",
+      "Run playwright to verify E2E tests pass"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
+      "frontend/tests/unit/persistenceService.types.ts",
+      "frontend/tests/unit/persistenceService.test.ts",
+      "frontend/tests/unit/crashRecoveryService.test.ts",
+      "frontend/tests/unit/useAutoSave.test.ts",
+      "frontend/tests/unit/persistenceStore.test.ts",
+      "frontend/tests/unit/ResumePrompt.test.tsx",
+      "frontend/tests/e2e/auto-save-crash-recovery.spec.ts",
+      "frontend/src/services/persistenceService.ts",
+      "frontend/src/hooks/useAutoSave.ts",
+      "frontend/src/stores/sceneStore.ts"
+    ]
+  },
+  "workflow_state": {
+    "workflow_type": "greenfield",
+    "current_phase": "implementation",
+    "completed_phases": ["entry", "research", "planning", "architecture", "design", "frontend-test"],
+    "remaining_phases": ["frontend-coding", "review", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-026"],
+    "forward_pass_score": 0.93,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
