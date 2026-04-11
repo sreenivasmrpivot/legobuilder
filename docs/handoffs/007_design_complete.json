@@ -1,0 +1,73 @@
+{
+  "handoff_id": "007_design_complete",
+  "from_agent": "design-agent",
+  "to_agent": "gate-6a-design-review",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "app_id": "app-legobuilder-20260410",
+  "timestamp": "2026-04-11T01:29:55Z",
+  "status": "complete",
+  "summary": "Design agent completed Low-Level Design for FR-PERF-001 (Issue #26) — Maintain >=60 FPS with 500 bricks using InstancedMesh and BVH raycasting. LLD covers: InstancedBrickManager (swap-and-pop O(1) slot management, 512-slot GPU buffer pre-allocation per brick type), BvhRaycastManager (three-mesh-bvh integration, 50ms debounce rebuild, SAH strategy), enhanced PerformanceMonitor (p95 ring buffer, heap tracking, draw call tracking, raycast latency), FrameScheduler singleton (single rAF loop), performanceStore Zustand slice, PerformanceOverlay dev HUD, memory management (zero-allocation render loop, disposal protocol), Vite bundle optimization (manual chunks, tree-shaking), TypeScript interfaces, 4 sequence diagrams, error handling (WebGL context loss, BVH failure, performance.memory fallback), security considerations, test case mapping for T-PERF-PERF-001-01/02/03 and T-PERF-PERF-003-01, and measurable NFR targets. Draft PR #57 is open on branch feature/26-fr-perf-001-design awaiting Gate 6a human design review before merge to main. Area determined as frontend (pure client-side SPA).",
+  "workflow_state": {
+    "current_phase": "design_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design"],
+    "remaining_phases": ["frontend-test", "frontend-coding", "review", "release"]
+  },
+  "artifacts": [
+    {
+      "name": "Low-Level Design: FR-PERF-001",
+      "path": "docs/features/FR-PERF-001/LOW_LEVEL_DESIGN.md",
+      "type": "design-doc",
+      "description": "Full LLD for >=60 FPS performance with 500 bricks: InstancedMesh batching, BVH raycasting, performance monitoring, memory management, Vite bundle optimization, TypeScript interfaces, sequence diagrams, error handling, security, test case mapping, measurable NFR targets"
+    },
+    {
+      "name": "Design PR #57",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/57",
+      "type": "pull-request",
+      "description": "Draft PR on branch feature/26-fr-perf-001-design — awaiting Gate 6a design review approval"
+    },
+    {
+      "name": "Handoff JSON",
+      "path": "docs/handoffs/007_design_complete.json",
+      "type": "handoff",
+      "description": "Machine-readable handoff artifact"
+    },
+    {
+      "name": "Handoff Markdown",
+      "path": "docs/handoffs/007_design_HANDOFF.md",
+      "type": "handoff",
+      "description": "Human-readable handoff summary"
+    }
+  ],
+  "human_review_required": [
+    "[HIGH] Gate 6a Design Review — PR #57 on branch feature/26-fr-perf-001-design must be reviewed and approved by a human before implementation begins. The LLD defines the InstancedMesh and BVH architecture that FR-SCENE-002 and FR-SCENE-003 implementations depend on.",
+    "[MEDIUM] Confirm whether three-mesh-bvh is already in frontend/package.json (see Open Question #1 in LLD). If absent, add three-mesh-bvh@^0.7 before coding agent runs.",
+    "[MEDIUM] Define the target 'mid-range device' specification (see Open Question #2 in LLD) to ensure CI performance tests use a representative environment.",
+    "[LOW] Decide whether PerformanceOverlay should be gated by URL param ?perf=1 in addition to import.meta.env.DEV (see Open Question #3 in LLD)."
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Review Draft PR #57 at https://github.com/sreenivasmrpivot/legobuilder/pull/57 — this is Gate 6a (Design Review)",
+      "Verify LLD at docs/features/FR-PERF-001/LOW_LEVEL_DESIGN.md is consistent with docs/TECHNICAL_ARCHITECTURE.md and docs/PRD.md",
+      "Check frontend/package.json for three-mesh-bvh dependency; add if absent",
+      "Approve and merge PR #57 to main to unblock frontend-test and frontend coding agents",
+      "On approval, frontend-test agent should read the merged LLD from main before writing tests",
+      "Note: area=frontend — all subsequent agents for FR-PERF-001 are frontend-test and frontend coding agents",
+      "Dependencies: FR-SCENE-002 (Issue #7) and FR-SCENE-003 (Issue #9) must be implemented before or alongside FR-PERF-001"
+    ],
+    "files_to_read": [
+      "docs/features/FR-PERF-001/LOW_LEVEL_DESIGN.md",
+      "https://github.com/sreenivasmrpivot/legobuilder/pull/57",
+      "docs/handoffs/007_design_complete.json",
+      "docs/handoffs/007_design_HANDOFF.md",
+      "frontend/src/engine/placementEngine.ts",
+      "frontend/src/engine/selectionManager.ts",
+      "frontend/src/utils/performanceMonitor.ts"
+    ]
+  },
+  "issue_number": 26,
+  "fr_id": "FR-PERF-001",
+  "branch": "feature/26-fr-perf-001-design",
+  "pr_number": 57,
+  "area": "frontend"
+}
