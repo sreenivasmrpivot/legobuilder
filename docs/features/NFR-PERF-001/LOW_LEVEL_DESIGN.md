@@ -6,33 +6,21 @@
 **Status:** Draft — Awaiting Gate 6a Design Review  
 **Author:** Spectra Design Agent  
 **Date:** 2026-04-11  
+**Dependencies:** #26 (FR-PERF-001), #7 (FR-SCENE-002), #9 (FR-SCENE-003)
 
 ---
 
 ## 1. Overview
 
-This document defines the low-level design for enforcing a ≥60 FPS frame rate when rendering 500 bricks in the LegoBuilder application. The requirement is validated exclusively through automated Puppeteer performance tests that measure `requestAnimationFrame` timestamps over a 10-second window. The p95 frame time must remain below 16.7 ms across all brick-count scenarios (100, 250, 500). CI must fail the build if any scenario breaches the threshold.
+This LLD specifies the design for enforcing a non-functional performance requirement: the LegoBuilder application **SHALL achieve ≥60 FPS (p95 frame time <16.7ms) with 500 bricks** on mid-range hardware (Intel i5 + integrated GPU). Enforcement is via automated Puppeteer-based performance tests that run in CI.
 
-### 1.1 Scope
-
-| In Scope | Out of Scope |
-|---|---|
-| Puppeteer-based frame-rate measurement harness | Runtime production performance monitoring |
-| `performanceMonitor` utility (dev/test builds only) | GPU driver or OS-level optimizations |
-| CI integration for performance test suite | Three.js renderer internals |
-| Test file `frontend/tests/performance/frameRate.test.ts` | Backend API performance |
-| p95 frame-time calculation algorithm | Mobile/tablet hardware targets |
-
-### 1.2 Performance Targets
-
-| Metric | Target | Measurement Method |
-|---|---|---|
-| p95 frame time (500 bricks) | < 16.7 ms | Puppeteer `requestAnimationFrame` timestamps |
-| p95 frame time (250 bricks) | < 16.7 ms | Puppeteer `requestAnimationFrame` timestamps |
-| p95 frame time (100 bricks) | < 16.7 ms | Puppeteer `requestAnimationFrame` timestamps |
-| Minimum frame time floor | ≥ 33.3 ms (30 FPS) | Puppeteer `requestAnimationFrame` timestamps |
-| Measurement window | 10 seconds | Continuous RAF loop |
-| Hardware baseline | Intel i5 + integrated GPU | CI runner specification |
+This document covers:
+- The `performanceMonitor` utility module (instrumentation layer)
+- The Puppeteer test harness (`frameRate.test.ts`)
+- CI integration strategy
+- Data models and interfaces
+- Sequence diagrams for measurement and assertion
+- Error handling and security considerations
 
 ---
 
@@ -44,492 +32,548 @@ This document defines the low-level design for enforcing a ≥60 FPS frame rate 
 frontend/
 ├── src/
 │   └── utils/
-│       └── performanceMonitor.ts          # Frame-timing instrumentation (dev/test only)
-└── tests/
-    └── performance/
-        ├── frameRate.test.ts              # Puppeteer performance test suite
-        ├── helpers/
-        │   ├── puppeteerSetup.ts          # Browser launch & page factory
-        │   ├── brickScenario.ts           # Brick placement automation helpers
-        │   └── frameMetrics.ts            # p95 calculation & assertion utilities
-        └── fixtures/
-            └── performanceThresholds.ts   # Shared threshold constants
+│       └── performanceMonitor.ts          [NEW] Frame timing instrumentation
+├── tests/
+│   └── performance/
+│       └── frameRate.test.ts              [NEW] Puppeteer perf test suite
+└── package.json                           [MODIFIED] Add puppeteer devDependency
 ```
 
-### 2.2 Component Responsibilities
+### 2.2 Module Responsibilities
 
-| Component | Responsibility | Lifecycle |
-|---|---|---|
-| `performanceMonitor.ts` | Instruments `requestAnimationFrame` loop; accumulates frame-time samples; exposes `getFrameMetrics()` on `window.__perfMonitor` | Dev + test builds only (tree-shaken in production) |
-| `frameRate.test.ts` | Orchestrates Puppeteer browser, places bricks, collects metrics, asserts p95 < 16.7 ms | CI test runner (Jest + Puppeteer) |
-| `puppeteerSetup.ts` | Launches headless Chromium with GPU flags; provides `createPage()` factory | Test setup/teardown |
-| `brickScenario.ts` | Automates brick placement via page `evaluate()` calls to the app's public API | Per-test scenario setup |
-| `frameMetrics.ts` | Reads `window.__perfMonitor.getFrameMetrics()`, computes p95, returns structured result | Per-test assertion |
-| `performanceThresholds.ts` | Exports `P95_THRESHOLD_MS = 16.7`, `MIN_FRAME_MS = 33.3`, `MEASUREMENT_WINDOW_MS = 10_000` | Shared constants |
+| Module | Type | Responsibility |
+|--------|------|----------------|
+| `performanceMonitor.ts` | Utility (runtime) | Instruments `requestAnimationFrame` loop; accumulates frame timestamps; exposes `getFrameStats()` on `window.__perfMonitor` in dev/test builds only |
+| `frameRate.test.ts` | Puppeteer test | Launches browser, loads app, places N bricks programmatically, collects frame timestamps over 10s window, asserts p95 frame time <16.7ms |
+| `vite.config.ts` | Build config | Defines `VITE_PERF_MONITOR` env flag; tree-shakes monitor in production builds |
+| CI workflow (`.github/workflows/`) | CI | Runs `frameRate.test.ts` as part of test suite; fails build on assertion failure |
 
-### 2.3 `performanceMonitor.ts` — Interface Contract
+### 2.3 Dependency Graph
 
-```typescript
-// Exposed on window only in development/test builds
-interface FrameMetrics {
-  sampleCount: number;       // Total RAF callbacks recorded
-  p95FrameTimeMs: number;    // 95th-percentile frame time in milliseconds
-  p50FrameTimeMs: number;    // Median frame time
-  maxFrameTimeMs: number;    // Worst-case frame time
-  minFrameTimeMs: number;    // Best-case frame time
-  durationMs: number;        // Total measurement window elapsed
-  droppedFrames: number;     // Frames exceeding 16.7 ms threshold
-}
-
-interface PerformanceMonitor {
-  start(): void;             // Begin recording RAF timestamps
-  stop(): void;              // Halt recording
-  reset(): void;             // Clear accumulated samples
-  getFrameMetrics(): FrameMetrics;
-  isRunning(): boolean;
-}
-
-// Attached to window in dev/test builds:
-// window.__perfMonitor: PerformanceMonitor
+```
+frameRate.test.ts
+  └── puppeteer (browser automation)
+        └── LegoBuilder App (running in headless Chromium)
+              ├── performanceMonitor.ts
+              │     ├── window.requestAnimationFrame (browser API)
+              │     └── window.__perfMonitor (exposed API surface)
+              ├── sceneStore (Zustand) — brick placement
+              └── BrickInstances.tsx — InstancedMesh rendering
 ```
 
-### 2.4 `frameRate.test.ts` — Test Suite Structure
+---
+
+## 3. Data Models & Interfaces
+
+### 3.1 FrameSample
 
 ```typescript
-// Three top-level describe blocks, one per brick-count scenario
+/** A single captured animation frame timestamp */
+interface FrameSample {
+  /** DOMHighResTimeStamp from requestAnimationFrame callback */
+  timestamp: DOMHighResTimeStamp;
+  /** Computed delta from previous frame in milliseconds */
+  deltaMs: number;
+}
+```
+
+### 3.2 FrameStats
+
+```typescript
+/** Aggregated statistics over a measurement window */
+interface FrameStats {
+  /** Total frames captured in the window */
+  frameCount: number;
+  /** Measurement window duration in milliseconds */
+  windowMs: number;
+  /** Mean frame time in milliseconds */
+  meanFrameMs: number;
+  /** p50 frame time in milliseconds */
+  p50FrameMs: number;
+  /** p95 frame time in milliseconds — PRIMARY ASSERTION TARGET */
+  p95FrameMs: number;
+  /** p99 frame time in milliseconds */
+  p99FrameMs: number;
+  /** Maximum frame time observed in milliseconds */
+  maxFrameMs: number;
+  /** Minimum frame time observed in milliseconds */
+  minFrameMs: number;
+  /** Effective FPS = 1000 / meanFrameMs */
+  effectiveFps: number;
+  /** ISO timestamp when measurement started */
+  startedAt: string;
+}
+```
+
+### 3.3 PerfMonitorAPI (window surface)
+
+```typescript
+/** Exposed on window.__perfMonitor in dev/test builds */
+interface PerfMonitorAPI {
+  /** Start collecting frame samples. Resets any prior collection. */
+  start(): void;
+  /** Stop collecting frame samples. */
+  stop(): void;
+  /** Return aggregated stats for all collected samples. */
+  getStats(): FrameStats;
+  /** Return raw frame samples (for debugging). */
+  getSamples(): FrameSample[];
+  /** True if currently collecting. */
+  readonly isRunning: boolean;
+}
+```
+
+### 3.4 TestScenario
+
+```typescript
+/** Defines a single performance test scenario */
+interface TestScenario {
+  /** Human-readable label */
+  label: string;
+  /** Number of bricks to place before measurement */
+  brickCount: number;
+  /** Measurement window in milliseconds */
+  windowMs: number;
+  /** p95 frame time threshold in milliseconds */
+  p95ThresholdMs: number;
+  /** Minimum acceptable frame time (30 FPS floor) */
+  minFrameTimeMs: number;
+}
+```
+
+### 3.5 Test Scenarios (Constants)
+
+```typescript
+const PERF_SCENARIOS: TestScenario[] = [
+  { label: '100 bricks',  brickCount: 100, windowMs: 10_000, p95ThresholdMs: 16.7, minFrameTimeMs: 33.3 },
+  { label: '250 bricks',  brickCount: 250, windowMs: 10_000, p95ThresholdMs: 16.7, minFrameTimeMs: 33.3 },
+  { label: '500 bricks',  brickCount: 500, windowMs: 10_000, p95ThresholdMs: 16.7, minFrameTimeMs: 33.3 },
+];
+```
+
+---
+
+## 4. API / Interface Contracts
+
+### 4.1 performanceMonitor.ts — Public API
+
+```typescript
+// src/utils/performanceMonitor.ts
+
+/**
+ * Installs the performance monitor on window.__perfMonitor.
+ * MUST be called once at app startup in dev/test builds.
+ * No-op in production (VITE_PERF_MONITOR !== 'true').
+ */
+export function installPerformanceMonitor(): void;
+
+/**
+ * Guard: returns true only when VITE_PERF_MONITOR === 'true'.
+ * Used by main.tsx to conditionally call installPerformanceMonitor().
+ */
+export function isPerfMonitorEnabled(): boolean;
+```
+
+**Installation point:** `frontend/src/main.tsx`
+
+```typescript
+// main.tsx (modification)
+import { installPerformanceMonitor, isPerfMonitorEnabled } from './utils/performanceMonitor';
+
+if (isPerfMonitorEnabled()) {
+  installPerformanceMonitor();
+}
+```
+
+### 4.2 frameRate.test.ts — Test Structure
+
+```typescript
+// tests/performance/frameRate.test.ts
+
 describe('NFR-PERF-001: Frame Rate Performance', () => {
-  describe('T-PERF-PERF-001-01: 100 bricks — p95 < 16.7 ms', () => { ... });
-  describe('T-PERF-PERF-001-02: 250 bricks — p95 < 16.7 ms', () => { ... });
-  describe('T-PERF-PERF-001-03: 500 bricks — p95 < 16.7 ms', () => { ... });
+  let browser: Browser;
+  let page: Page;
+
+  beforeAll(async () => {
+    browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+  });
+
+  afterAll(async () => {
+    await browser.close();
+  });
+
+  beforeEach(async () => {
+    page = await browser.newPage();
+    // Load app with perf monitor enabled
+    await page.goto(`${BASE_URL}?perfMonitor=true`, { waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => (window as any).__perfMonitor !== undefined);
+  });
+
+  afterEach(async () => {
+    await page.close();
+  });
+
+  for (const scenario of PERF_SCENARIOS) {
+    it(`p95 frame time <16.7ms with ${scenario.brickCount} bricks`, async () => {
+      // 1. Place N bricks programmatically via exposed store API
+      await placeBricks(page, scenario.brickCount);
+      // 2. Start measurement
+      await page.evaluate(() => (window as any).__perfMonitor.start());
+      // 3. Wait for measurement window
+      await new Promise(r => setTimeout(r, scenario.windowMs));
+      // 4. Stop and collect stats
+      await page.evaluate(() => (window as any).__perfMonitor.stop());
+      const stats = await page.evaluate(() => (window as any).__perfMonitor.getStats());
+      // 5. Assert
+      expect(stats.p95FrameMs).toBeLessThan(scenario.p95ThresholdMs);
+      expect(stats.frameCount).toBeGreaterThan(500); // sanity: at least 500 frames in 10s
+    });
+  }
 });
 ```
 
-Each describe block follows the same pattern:
-1. `beforeAll` — launch browser, navigate to app URL, wait for scene ready
-2. `beforeEach` — reset `window.__perfMonitor`, place N bricks via `brickScenario`
-3. `it` — start monitor, wait 10 s, stop monitor, assert p95 < 16.7 ms
-4. `afterAll` — close browser
-
----
-
-## 3. Data Models
-
-### 3.1 Frame Sample Record
+### 4.3 Brick Placement Helper
 
 ```typescript
-// Internal to performanceMonitor.ts — not exposed externally
-type FrameSample = {
-  timestamp: DOMHighResTimeStamp;  // performance.now() at RAF callback
-  deltaMs: number;                 // Time since previous RAF callback
-};
-```
-
-### 3.2 Test Result Record
-
-```typescript
-// Returned by frameMetrics.ts collectMetrics()
-type PerformanceTestResult = {
-  scenario: '100-bricks' | '250-bricks' | '500-bricks';
-  brickCount: number;
-  metrics: FrameMetrics;           // From window.__perfMonitor.getFrameMetrics()
-  passed: boolean;                 // metrics.p95FrameTimeMs < P95_THRESHOLD_MS
-  timestamp: string;               // ISO 8601 — for CI artifact correlation
-};
-```
-
-### 3.3 Threshold Constants
-
-```typescript
-// frontend/tests/performance/fixtures/performanceThresholds.ts
-export const P95_THRESHOLD_MS = 16.7;   // ≥60 FPS boundary
-export const MIN_FRAME_MS = 33.3;       // 30 FPS floor (never below)
-export const MEASUREMENT_WINDOW_MS = 10_000;  // 10-second window
-export const WARMUP_FRAMES = 60;        // Discard first 60 frames (1 s at 60 FPS)
-
-export const BRICK_SCENARIOS = [
-  { id: 'T-PERF-PERF-001-01', count: 100 },
-  { id: 'T-PERF-PERF-001-02', count: 250 },
-  { id: 'T-PERF-PERF-001-03', count: 500 },
-] as const;
-```
-
----
-
-## 4. API / Integration Points
-
-> This is a pure frontend NFR with no backend API endpoints. Integration points are between the test harness and the running application.
-
-### 4.1 `window.__perfMonitor` — Browser-Side API
-
-| Method | Signature | Description |
-|---|---|---|
-| `start()` | `() => void` | Registers a `requestAnimationFrame` callback loop; records `performance.now()` deltas |
-| `stop()` | `() => void` | Cancels the RAF loop; freezes sample array |
-| `reset()` | `() => void` | Clears sample array; resets counters |
-| `getFrameMetrics()` | `() => FrameMetrics` | Computes and returns p95, p50, max, min, dropped frames from current sample array |
-| `isRunning()` | `() => boolean` | Returns whether the RAF loop is active |
-
-**Activation guard:** `performanceMonitor.ts` checks `process.env.NODE_ENV !== 'production'` before attaching to `window`. In production builds, the module is a no-op and tree-shaken by Vite.
-
-### 4.2 Puppeteer `page.evaluate()` Bridge
-
-The test harness communicates with the running app exclusively via `page.evaluate()` calls:
-
-```typescript
-// Start monitoring
-await page.evaluate(() => window.__perfMonitor.start());
-
-// Wait measurement window
-await new Promise(resolve => setTimeout(resolve, MEASUREMENT_WINDOW_MS));
-
-// Collect metrics
-const metrics = await page.evaluate(() => window.__perfMonitor.getFrameMetrics());
-```
-
-### 4.3 Brick Placement API (via `brickScenario.ts`)
-
-Bricks are placed by calling the app's internal scene API through `page.evaluate()`:
-
-```typescript
-// brickScenario.ts
-export async function placeBricks(page: Page, count: number): Promise<void> {
+/**
+ * Places N bricks in the scene via the Zustand store exposed on window.
+ * Requires FR-SCENE-002 (brick placement) to be implemented.
+ */
+async function placeBricks(page: Page, count: number): Promise<void> {
   await page.evaluate((n: number) => {
-    // Calls the app's public scene API (from FR-SCENE-002 / FR-SCENE-003)
+    const store = (window as any).__sceneStore; // exposed by sceneStore.ts in test builds
     for (let i = 0; i < n; i++) {
-      window.__legoApp.scene.addBrick({
+      store.getState().addBrick({
+        id: `perf-brick-${i}`,
         type: '2x4',
         position: { x: (i % 20) * 2, y: Math.floor(i / 20), z: 0 },
+        rotation: 0,
         color: '#FF0000',
       });
     }
   }, count);
-  // Wait for Three.js render cycle to settle
+  // Wait for Three.js to render the new bricks
   await page.waitForFunction(
-    (n: number) => window.__legoApp.scene.getBrickCount() === n,
-    { timeout: 5000 },
+    (n: number) => (window as any).__sceneStore?.getState().bricks.length >= n,
+    {},
     count
   );
+  // Allow one rAF cycle to settle
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(r)));
 }
 ```
-
-**Dependency:** `window.__legoApp.scene` is the public scene API exposed by FR-SCENE-002 (Issue #7) and FR-SCENE-003 (Issue #9). The performance test depends on those features being implemented.
 
 ---
 
 ## 5. Sequence Diagrams
 
-### 5.1 Single Performance Test Scenario (Happy Path)
+### 5.1 Happy Path — Single Scenario (500 bricks, p95 passes)
 
 ```mermaid
 sequenceDiagram
-    participant CI as CI Runner (Jest)
+    participant CI as CI Runner
     participant PT as frameRate.test.ts
-    participant PU as puppeteerSetup.ts
-    participant BS as brickScenario.ts
-    participant FM as frameMetrics.ts
-    participant BR as Headless Chromium
+    participant PU as Puppeteer Browser
     participant APP as LegoBuilder App
-    participant PM as performanceMonitor.ts
+    participant PM as performanceMonitor
+    participant RAF as requestAnimationFrame
 
-    CI->>PT: jest --testPathPattern=performance
-    PT->>PU: createBrowser()
-    PU->>BR: puppeteer.launch({ headless: true, args: GPU_FLAGS })
-    BR-->>PU: browser instance
-    PU->>BR: browser.newPage()
-    BR-->>PU: page instance
-    PU-->>PT: { browser, page }
-
-    PT->>BR: page.goto(APP_URL)
-    BR->>APP: HTTP GET /
-    APP-->>BR: React SPA loaded
-    BR-->>PT: page ready
-
-    PT->>BR: page.waitForFunction('window.__perfMonitor !== undefined')
-    BR->>PM: check window.__perfMonitor
-    PM-->>BR: defined
-    BR-->>PT: condition met
-
-    PT->>BS: placeBricks(page, 500)
-    BS->>BR: page.evaluate(addBricks, 500)
-    BR->>APP: window.__legoApp.scene.addBrick() x500
-    APP-->>BR: bricks rendered in Three.js scene
-    BS->>BR: page.waitForFunction(brickCount === 500)
-    BR-->>BS: condition met
-    BS-->>PT: bricks placed
-
-    PT->>BR: page.evaluate(() => window.__perfMonitor.reset())
-    PT->>BR: page.evaluate(() => window.__perfMonitor.start())
-    BR->>PM: start RAF loop
-    PM-->>BR: recording
-
-    Note over PT,PM: 10-second measurement window
-    PT->>PT: await sleep(10_000)
-
-    PT->>BR: page.evaluate(() => window.__perfMonitor.stop())
-    BR->>PM: cancel RAF loop
-    PM-->>BR: stopped
-
-    PT->>FM: collectMetrics(page)
-    FM->>BR: page.evaluate(() => window.__perfMonitor.getFrameMetrics())
-    BR->>PM: getFrameMetrics()
-    PM-->>BR: FrameMetrics { p95: 14.2, sampleCount: 598, ... }
-    BR-->>FM: FrameMetrics
-    FM-->>PT: PerformanceTestResult { passed: true, metrics }
-
-    PT->>PT: expect(result.metrics.p95FrameTimeMs).toBeLessThan(16.7)
+    CI->>PT: npm run test:perf
+    PT->>PU: puppeteer.launch({ headless: true })
+    PU->>APP: page.goto(BASE_URL?perfMonitor=true)
+    APP->>PM: installPerformanceMonitor() [main.tsx]
+    PM->>RAF: register rAF callback
+    APP-->>PU: page loaded, window.__perfMonitor defined
+    PT->>PU: placeBricks(page, 500)
+    PU->>APP: window.__sceneStore.addBrick() x500
+    APP-->>PU: bricks.length === 500
+    PT->>PU: window.__perfMonitor.start()
+    PM->>RAF: begin collecting FrameSamples
+    loop Every animation frame (~16.7ms)
+        RAF->>PM: callback(timestamp)
+        PM->>PM: push FrameSample { timestamp, deltaMs }
+    end
+    Note over PM: 10,000ms window elapses
+    PT->>PU: window.__perfMonitor.stop()
+    PM->>RAF: cancel rAF loop
+    PT->>PU: window.__perfMonitor.getStats()
+    PM-->>PT: FrameStats { p95FrameMs: 14.2, frameCount: 598 }
+    PT->>PT: expect(14.2).toBeLessThan(16.7) PASS
     PT-->>CI: PASS
 ```
 
-### 5.2 Performance Test Failure Path
+### 5.2 Failure Path — p95 Exceeds Threshold
 
 ```mermaid
 sequenceDiagram
-    participant CI as CI Runner (Jest)
+    participant CI as CI Runner
     participant PT as frameRate.test.ts
-    participant FM as frameMetrics.ts
-    participant BR as Headless Chromium
-    participant PM as performanceMonitor.ts
+    participant PU as Puppeteer Browser
+    participant PM as performanceMonitor
 
-    Note over PT,PM: 10-second measurement window elapsed
-    PT->>BR: page.evaluate(() => window.__perfMonitor.stop())
-    PT->>FM: collectMetrics(page)
-    FM->>BR: page.evaluate(() => window.__perfMonitor.getFrameMetrics())
-    PM-->>BR: FrameMetrics { p95: 18.3, droppedFrames: 42, ... }
-    BR-->>FM: FrameMetrics
-    FM-->>PT: PerformanceTestResult { passed: false, metrics }
-
-    PT->>PT: expect(18.3).toBeLessThan(16.7) → FAIL
-    PT->>CI: throw AssertionError with diagnostic message
-    Note over CI: Build marked FAILED
-    CI->>CI: Upload performance-report.json as CI artifact
+    PT->>PU: window.__perfMonitor.getStats()
+    PM-->>PT: FrameStats { p95FrameMs: 22.1, frameCount: 450 }
+    PT->>PT: expect(22.1).toBeLessThan(16.7) FAIL
+    PT-->>CI: FAIL — p95 frame time 22.1ms exceeds 16.7ms threshold
+    CI->>CI: Mark build FAILED
+    CI->>CI: Emit test failure report with FrameStats JSON
 ```
 
-### 5.3 `performanceMonitor.ts` Internal RAF Loop
+### 5.3 performanceMonitor Internal — rAF Loop
 
 ```mermaid
 sequenceDiagram
+    participant APP as main.tsx
+    participant PM as performanceMonitor
+    participant WIN as window
     participant RAF as requestAnimationFrame
-    participant PM as performanceMonitor.ts
-    participant SA as samples[] array
 
-    PM->>PM: start() called
-    PM->>PM: lastTimestamp = performance.now()
-    PM->>RAF: requestAnimationFrame(onFrame)
+    APP->>PM: installPerformanceMonitor()
+    PM->>WIN: window.__perfMonitor = PerfMonitorAPI
+    Note over PM: Monitor installed, not yet running
 
-    loop Every animation frame
-        RAF->>PM: onFrame(timestamp)
-        PM->>PM: deltaMs = timestamp - lastTimestamp
-        PM->>PM: lastTimestamp = timestamp
-        alt deltaMs > 0 (skip first frame)
-            PM->>SA: push({ timestamp, deltaMs })
-        end
-        alt isRunning
-            PM->>RAF: requestAnimationFrame(onFrame)
-        end
+    WIN->>PM: __perfMonitor.start()
+    PM->>PM: samples = [], rafId = null, isRunning = true
+    PM->>RAF: requestAnimationFrame(tick)
+
+    loop isRunning === true
+        RAF->>PM: tick(timestamp)
+        PM->>PM: deltaMs = timestamp - prevTimestamp
+        PM->>PM: samples.push({ timestamp, deltaMs })
+        PM->>PM: prevTimestamp = timestamp
+        PM->>RAF: requestAnimationFrame(tick)
     end
 
-    PM->>PM: stop() called → isRunning = false
-    PM->>PM: getFrameMetrics() called
-    PM->>SA: sort samples by deltaMs
-    PM->>PM: p95 = samples[Math.floor(samples.length * 0.95)].deltaMs
-    PM-->>PM: return FrameMetrics
+    WIN->>PM: __perfMonitor.stop()
+    PM->>RAF: cancelAnimationFrame(rafId)
+    PM->>PM: isRunning = false
+
+    WIN->>PM: __perfMonitor.getStats()
+    PM->>PM: sort(samples.map(s => s.deltaMs))
+    PM->>PM: compute p50, p95, p99, mean, min, max
+    PM-->>WIN: FrameStats
+```
+
+### 5.4 CI Integration — Full Pipeline
+
+```mermaid
+sequenceDiagram
+    participant GH as GitHub Push
+    participant CI as GitHub Actions
+    participant VT as Vitest (unit/component)
+    participant PW as Playwright (e2e)
+    participant PP as Puppeteer (perf)
+
+    GH->>CI: push / PR event
+    CI->>CI: npm ci
+    CI->>VT: npm run test:unit
+    VT-->>CI: PASS
+    CI->>PW: npm run test:e2e
+    PW-->>CI: PASS
+    CI->>CI: npm run build:perf (VITE_PERF_MONITOR=true)
+    CI->>CI: serve dist-perf/ on localhost:4173
+    CI->>PP: npm run test:perf
+    PP-->>CI: PASS / FAIL
+    alt FAIL
+        CI->>GH: Build status = FAILED
+        CI->>GH: Upload FrameStats JSON artifact
+    else PASS
+        CI->>GH: Build status = PASSED
+    end
 ```
 
 ---
 
-## 6. p95 Calculation Algorithm
+## 6. performanceMonitor.ts — Algorithm Detail
 
-The p95 frame time is computed from the raw sample array collected during the measurement window:
+### 6.1 p95 Computation
+
+```
+Given N frame delta samples [d1, d2, ..., dN] sorted ascending:
+  p95 index = Math.ceil(0.95 x N) - 1
+  p95 = sortedDeltas[p95Index]
+```
+
+This is the **nearest-rank method** — no interpolation. Chosen for simplicity and determinism.
+
+### 6.2 Guard: Production Build Exclusion
 
 ```typescript
-function computeP95(samples: FrameSample[]): number {
-  if (samples.length === 0) return 0;
-  // Discard warmup frames (first WARMUP_FRAMES samples)
-  const stable = samples.slice(WARMUP_FRAMES);
-  if (stable.length === 0) return 0;
-  // Sort ascending by frame delta
-  const sorted = [...stable].sort((a, b) => a.deltaMs - b.deltaMs);
-  // p95 index: 95th percentile
-  const idx = Math.floor(sorted.length * 0.95);
-  return sorted[Math.min(idx, sorted.length - 1)].deltaMs;
+// performanceMonitor.ts
+export function isPerfMonitorEnabled(): boolean {
+  return import.meta.env.VITE_PERF_MONITOR === 'true';
+}
+
+export function installPerformanceMonitor(): void {
+  if (!isPerfMonitorEnabled()) return; // dead-code eliminated by Vite in prod
+  // ... install logic
 }
 ```
 
-**Warmup discard:** The first 60 frames (~1 second at 60 FPS) are discarded to exclude Three.js scene initialization overhead from the measurement. This ensures the p95 reflects steady-state rendering performance.
+Vite's tree-shaking removes the entire module body when `VITE_PERF_MONITOR` is not `'true'` at build time. **Zero runtime overhead in production.**
 
-**Sample count expectation:** At 60 FPS over 10 seconds, approximately 600 frames are expected. After discarding 60 warmup frames, ~540 samples contribute to the p95 calculation.
+### 6.3 sceneStore Window Exposure (Test Build Only)
+
+The Zustand `sceneStore` must be exposed on `window.__sceneStore` in test builds so the Puppeteer helper can call `addBrick()` programmatically:
+
+```typescript
+// src/stores/sceneStore.ts (modification — test build only)
+if (import.meta.env.VITE_PERF_MONITOR === 'true') {
+  (window as any).__sceneStore = useSceneStore;
+}
+```
+
+This is guarded by the same `VITE_PERF_MONITOR` flag and is tree-shaken in production.
 
 ---
 
-## 7. CI Integration Design
+## 7. Error Handling Strategy
 
-### 7.1 Jest Configuration
+| Condition | Detection | Handling |
+|-----------|-----------|----------|
+| `window.__perfMonitor` not defined after page load | `page.waitForFunction()` timeout (30s) | Test fails with timeout error; CI marks build failed |
+| `window.__sceneStore` not defined | `page.evaluate()` throws | Test fails with descriptive error message |
+| Fewer than 500 frames collected in 10s window | `stats.frameCount < 500` assertion | Test fails with sanity check message |
+| Browser crash / Puppeteer disconnect | `page.on('error')` handler | Test fails; browser is closed in `afterAll` |
+| `addBrick()` throws (invalid brick data) | `page.evaluate()` rejects | Test fails; error propagated to test runner |
+| p95 exceeds threshold | `expect(stats.p95FrameMs).toBeLessThan(16.7)` | Test fails; full `FrameStats` JSON logged to CI artifact |
 
-```typescript
-// jest.performance.config.ts (separate Jest project for performance tests)
-export default {
-  displayName: 'performance',
-  testMatch: ['**/tests/performance/**/*.test.ts'],
-  testTimeout: 30_000,          // 30 s per test (10 s window + setup overhead)
-  globalSetup: './tests/performance/helpers/puppeteerSetup.ts',
-  globalTeardown: './tests/performance/helpers/puppeteerTeardown.ts',
-  reporters: [
-    'default',
-    ['jest-junit', { outputDirectory: 'reports', outputName: 'performance-junit.xml' }],
-  ],
-};
+---
+
+## 8. Security Considerations
+
+| Concern | Mitigation |
+|---------|------------|
+| `window.__perfMonitor` exposed in production | Guarded by `VITE_PERF_MONITOR` env flag; Vite tree-shakes in prod build |
+| `window.__sceneStore` exposed in production | Same guard; never present in production bundle |
+| Puppeteer running with `--no-sandbox` in CI | Acceptable in isolated CI container; never used in production |
+| Headless Chromium version drift | Pin `puppeteer` version in `package.json`; use `puppeteer` (bundled Chromium) not `puppeteer-core` |
+| Test data injection via `addBrick()` | Only available in test builds; brick data is validated by `sceneStore` schema |
+
+---
+
+## 9. CI Integration Design
+
+### 9.1 npm Scripts (package.json additions)
+
+```json
+{
+  "scripts": {
+    "test:perf": "node --experimental-vm-modules tests/performance/frameRate.test.ts",
+    "build:perf": "VITE_PERF_MONITOR=true vite build --outDir dist-perf",
+    "preview:perf": "vite preview --outDir dist-perf --port 4173"
+  }
+}
 ```
 
-### 7.2 CI Workflow Step
+### 9.2 GitHub Actions Job (perf-test)
 
 ```yaml
-# .github/workflows/ci.yml (performance test step)
-- name: Run Performance Tests
-  run: |
-    npx vite build --mode test
-    npx vite preview --port 4173 &
-    sleep 3  # Wait for preview server
-    npx jest --config jest.performance.config.ts --forceExit
-  env:
-    NODE_ENV: test
-    PERF_APP_URL: http://localhost:4173
-
-- name: Upload Performance Report
-  if: always()
-  uses: actions/upload-artifact@v4
-  with:
-    name: performance-report
-    path: reports/performance-junit.xml
+perf-test:
+  runs-on: ubuntu-latest
+  needs: [unit-test, e2e-test]   # run after functional tests pass
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+    - name: Install dependencies
+      run: npm ci
+      working-directory: frontend
+    - name: Build with perf monitor
+      run: npm run build:perf
+      working-directory: frontend
+      env:
+        VITE_PERF_MONITOR: 'true'
+    - name: Start preview server
+      run: npm run preview:perf &
+      working-directory: frontend
+    - name: Wait for server
+      run: npx wait-on http://localhost:4173 --timeout 30000
+    - name: Run performance tests
+      run: npm run test:perf
+      working-directory: frontend
+      env:
+        BASE_URL: 'http://localhost:4173'
+    - name: Upload FrameStats artifact on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: perf-frame-stats
+        path: frontend/tests/performance/results/
 ```
 
-### 7.3 Build Failure Guarantee
+### 9.3 Environment Variables
 
-Jest exits with code 1 when any test assertion fails. The CI step propagates this exit code, causing the workflow job to fail. GitHub Actions marks the PR check as failed, blocking merge until the performance regression is resolved.
+| Variable | Value in CI | Purpose |
+|----------|-------------|---------|
+| `VITE_PERF_MONITOR` | `'true'` | Enables `performanceMonitor` and `window.__sceneStore` exposure |
+| `BASE_URL` | `'http://localhost:4173'` | Puppeteer target URL |
+| `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` | `'false'` (default) | Use bundled Chromium |
 
 ---
 
-## 8. Puppeteer Launch Configuration
+## 10. Performance Budget
 
-```typescript
-// puppeteerSetup.ts
-const GPU_FLAGS = [
-  '--no-sandbox',
-  '--disable-setuid-sandbox',
-  '--disable-dev-shm-usage',
-  '--disable-gpu-sandbox',
-  '--use-gl=swiftshader',          // Software GL for CI (no physical GPU)
-  '--enable-webgl',
-  '--ignore-gpu-blocklist',
-];
-
-export async function createBrowser(): Promise<Browser> {
-  return puppeteer.launch({
-    headless: true,
-    args: GPU_FLAGS,
-    defaultViewport: { width: 1280, height: 720 },
-  });
-}
-```
-
-**SwiftShader rationale:** CI runners typically lack a physical GPU. SwiftShader provides a software WebGL implementation that enables Three.js rendering in headless Chromium. The p95 threshold of 16.7 ms is calibrated for SwiftShader on a mid-range CI runner (equivalent to Intel i5 + integrated GPU performance).
-
----
-
-## 9. Error Handling Strategy
-
-| Error Condition | Detection | Handling |
-|---|---|---|
-| `window.__perfMonitor` not defined | `page.waitForFunction` timeout (5 s) | Test fails with descriptive error: "performanceMonitor not attached — check NODE_ENV=test" |
-| App fails to load | `page.goto` timeout (30 s) | Test fails with navigation error; CI artifact includes screenshot |
-| Brick placement timeout | `page.waitForFunction` timeout (5 s) | Test fails with "brick count mismatch" error; logs expected vs actual count |
-| Zero samples collected | `sampleCount === 0` check in `frameMetrics.ts` | Test fails with "no frame samples collected — measurement window too short or RAF not running" |
-| Insufficient samples (< 100) | `sampleCount < 100` check | Test emits warning; proceeds with available samples (does not fail) |
-| p95 exceeds threshold | Jest `expect` assertion | Test fails; error message includes p95 value, threshold, dropped frame count, and scenario name |
-| Browser crash | Puppeteer `disconnected` event | `afterAll` cleanup catches; test marked as failed; browser process killed |
-| CI preview server not ready | HTTP health check retry (3 attempts, 1 s apart) | Fails fast with "app server not reachable at PERF_APP_URL" |
-
-### 9.1 Diagnostic Output on Failure
-
-When a performance assertion fails, the test logs a structured diagnostic block:
-
-```
-[NFR-PERF-001] FAIL — T-PERF-PERF-001-03 (500 bricks)
-  p95 frame time : 18.3 ms  (threshold: 16.7 ms)
-  p50 frame time : 12.1 ms
-  max frame time : 47.2 ms
-  dropped frames : 42 / 598 (7.0%)
-  sample count   : 598
-  measurement    : 10,003 ms
-  → Investigate: max frame spike at 47.2 ms suggests GC pause or layout thrash
-```
-
----
-
-## 10. Security Considerations
-
-| Concern | Risk | Mitigation |
-|---|---|---|
-| `window.__perfMonitor` exposure | Low — dev/test only; no sensitive data | Guarded by `NODE_ENV !== 'production'`; Vite tree-shakes in production build |
-| `window.__legoApp` exposure | Low — test API surface | Same guard; not present in production bundle |
-| Puppeteer `--no-sandbox` flag | Medium — CI only | Acceptable in isolated CI containers; never used in production or local dev without explicit opt-in |
-| Arbitrary `page.evaluate()` execution | Low — test code only | Tests run in controlled CI environment; no user-supplied input reaches `evaluate()` |
-| CI artifact leakage | Low | Performance reports contain only timing data; no PII or secrets |
+| Metric | Target | Measurement Method |
+|--------|--------|-------------------|
+| p95 frame time (500 bricks) | <16.7ms | Puppeteer rAF timestamps, 10s window |
+| p95 frame time (250 bricks) | <16.7ms | Puppeteer rAF timestamps, 10s window |
+| p95 frame time (100 bricks) | <16.7ms | Puppeteer rAF timestamps, 10s window |
+| Minimum frame time floor | >=33.3ms (30 FPS) | Sanity check on minFrameMs |
+| Frame count in 10s window | >=500 frames | Sanity check on frameCount |
+| performanceMonitor overhead | 0ms in production | Tree-shaken by Vite |
+| performanceMonitor overhead (test) | <0.1ms/frame | Single array push per rAF |
 
 ---
 
 ## 11. Test Case Mapping
 
-| Test ID | Scenario | Brick Count | Assertion | Pass Condition |
-|---|---|---|---|---|
-| T-PERF-PERF-001-01 | 100 bricks — baseline | 100 | p95 frame time < 16.7 ms | All 100 bricks rendered; p95 < 16.7 ms over 10 s |
-| T-PERF-PERF-001-02 | 250 bricks — mid-load | 250 | p95 frame time < 16.7 ms | All 250 bricks rendered; p95 < 16.7 ms over 10 s |
-| T-PERF-PERF-001-03 | 500 bricks — peak load | 500 | p95 frame time < 16.7 ms | All 500 bricks rendered; p95 < 16.7 ms over 10 s |
-
-### 11.1 Acceptance Criteria Traceability
-
-| Acceptance Criterion (Issue #29) | Test Case | Design Element |
-|---|---|---|
-| Given 500 bricks, p95 frame time < 16.7 ms | T-PERF-PERF-001-03 | `frameRate.test.ts` 500-brick describe block |
-| All brick-count scenarios (100, 250, 500) pass ≥60 FPS | T-PERF-PERF-001-01, -02, -03 | Three describe blocks in `frameRate.test.ts` |
-| Performance test failure marks build as failed | All three | Jest exit code 1 propagated to CI workflow |
+| Test Case ID | Scenario | Assertion | Pass Condition |
+|-------------|----------|-----------|----------------|
+| T-PERF-PERF-001-01 | 500 bricks, 10s window | `p95FrameMs < 16.7` | p95 frame time <16.7ms |
+| T-PERF-PERF-001-02 | 100 + 250 + 500 bricks (all scenarios) | All pass `p95FrameMs < 16.7` | All three scenarios pass |
+| T-PERF-PERF-001-03 | CI build failure on test failure | Build marked FAILED | CI exits non-zero on any assertion failure |
 
 ---
 
-## 12. Dependencies
+## 12. Files to Create / Modify
 
-| Dependency | Type | Reason |
-|---|---|---|
-| FR-PERF-001 (Issue #26) | Functional | Defines the scene rendering pipeline that must achieve 60 FPS |
-| FR-SCENE-002 (Issue #7) | Functional | Provides `window.__legoApp.scene.addBrick()` API used by `brickScenario.ts` |
-| FR-SCENE-003 (Issue #9) | Functional | Provides `window.__legoApp.scene.getBrickCount()` for placement verification |
-| puppeteer | npm devDependency | Headless browser automation |
-| jest-junit | npm devDependency | JUnit XML reporter for CI artifact upload |
-| vite (preview mode) | Build tool | Serves production-like build for Puppeteer to test against |
-
----
-
-## 13. NFR Compliance Summary
-
-| NFR | Target | Design Mechanism | Verified By |
-|---|---|---|---|
-| Frame rate ≥ 60 FPS | p95 < 16.7 ms | `performanceMonitor.ts` RAF instrumentation | T-PERF-PERF-001-01 through -03 |
-| 30 FPS floor | min frame time ≥ 33.3 ms | Logged in `FrameMetrics.minFrameTimeMs` | Diagnostic output (non-blocking) |
-| CI enforcement | Build fails on breach | Jest exit code 1 → GitHub Actions failure | CI workflow step |
-| Hardware baseline | Intel i5 + integrated GPU | SwiftShader WebGL in headless Chromium | CI runner specification |
-| Measurement window | 10 seconds | `MEASUREMENT_WINDOW_MS = 10_000` constant | `frameRate.test.ts` |
-| Warmup exclusion | First 60 frames discarded | `WARMUP_FRAMES = 60` in p95 algorithm | `performanceMonitor.ts` |
+| File | Action | Description |
+|------|--------|-------------|
+| `frontend/src/utils/performanceMonitor.ts` | CREATE | rAF instrumentation, `PerfMonitorAPI`, `FrameStats` computation |
+| `frontend/tests/performance/frameRate.test.ts` | CREATE | Puppeteer test suite for T-PERF-PERF-001-01/02/03 |
+| `frontend/src/main.tsx` | MODIFY | Conditionally call `installPerformanceMonitor()` |
+| `frontend/src/stores/sceneStore.ts` | MODIFY | Expose `window.__sceneStore` when `VITE_PERF_MONITOR=true` |
+| `frontend/package.json` | MODIFY | Add `puppeteer` devDependency; add `test:perf`, `build:perf`, `preview:perf` scripts |
+| `.github/workflows/ci.yml` | MODIFY | Add `perf-test` job after unit/e2e jobs |
 
 ---
 
-## 14. Open Questions / Assumptions
+## 13. Open Questions & Assumptions
 
-| # | Question / Assumption | Impact | Resolution |
-|---|---|---|---|
-| 1 | **Assumption:** CI runner performance is equivalent to Intel i5 + integrated GPU. | If CI runner is significantly slower, threshold may need adjustment. | Validate with a calibration run on the actual CI runner before merging. |
-| 2 | **Assumption:** SwiftShader WebGL performance is representative of integrated GPU performance. | SwiftShader may be slower; threshold may need a CI-specific override. | Consider a `CI_PERF_THRESHOLD_MS` env var override (default 16.7 ms). |
-| 3 | **Open:** Should the 30 FPS floor (`minFrameTimeMs ≥ 33.3 ms`) be a hard assertion or a warning? | Issue #29 states "minimum frame time never below 33.3 ms" but acceptance criteria only mention p95. | Treat as a warning (logged, not failing) until confirmed with product owner. |
-| 4 | **Assumption:** `window.__legoApp.scene` API is stable and available when FR-SCENE-002 and FR-SCENE-003 are implemented. | If the API shape changes, `brickScenario.ts` must be updated. | Coordinate with FR-SCENE-002 / FR-SCENE-003 implementation agents. |
+| # | Question | Assumption | Impact |
+|---|----------|------------|--------|
+| 1 | Does `sceneStore.addBrick()` accept the brick shape used in the test helper? | Assumes `PlacedBrick` shape from FR-SCENE-002 LLD: `{ id, type, position, rotation, color }` | If shape differs, `placeBricks()` helper must be updated |
+| 2 | Is `puppeteer` already in `package.json`? | Assumed NOT present; must be added as devDependency | If already present, skip package.json modification |
+| 3 | Does the CI runner support headless Chromium? | Assumed `ubuntu-latest` with `--no-sandbox` flag | If runner is Alpine/minimal, may need `chromium` system package |
+| 4 | What is the `BASE_URL` for the preview server in CI? | Assumed `http://localhost:4173` (Vite preview default) | If port differs, update `BASE_URL` env var |
+| 5 | Is `wait-on` available as a devDependency? | Assumed NOT present; must be added or use `sleep 5` fallback | Prefer `wait-on` for reliability |
+| 6 | Does the existing `playwright.config.ts` conflict with Puppeteer test runner? | Assumed separate test runners; Puppeteer tests use Node directly, not Playwright | If test runner unification is desired, consider `playwright` CDP mode instead |
 
 ---
 
-*Generated by Spectra Design Agent — NFR-PERF-001 — Issue #29*
+## 14. Rejected Alternatives
+
+| Alternative | Reason Rejected |
+|-------------|----------------|
+| Playwright `page.metrics()` instead of Puppeteer rAF | Issue spec explicitly requires Puppeteer + rAF timestamps; Playwright metrics use different measurement model |
+| `performance.now()` polling instead of rAF | rAF timestamps are synchronized with the browser's rendering pipeline; `performance.now()` polling would miss frame boundaries |
+| Vitest browser mode for perf tests | Vitest browser mode does not support headless Chromium with the required level of control for 10s measurement windows |
+| Inline p95 computation in test file | Extracted to `performanceMonitor.ts` for reusability and to keep test file focused on assertions |
+
+---
+
+*Spectra Design Agent — NFR-PERF-001 LLD v1.0*
