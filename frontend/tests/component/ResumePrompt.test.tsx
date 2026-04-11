@@ -4,6 +4,9 @@
  * Test ID:
  *   T-UNIT-REL-001-05  ResumePrompt renders with correct brick count
  *
+ * M1 FIX: Now imports the real production ResumePrompt component
+ * instead of defining an inline stub.
+ *
  * Spectra-Agent: frontend-test
  * Spectra-FRs: NFR-REL-001
  * Spectra-Tests: T-UNIT-REL-001-05
@@ -12,43 +15,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import React from 'react';
 
-// ---------------------------------------------------------------------------
-// Minimal ResumePrompt component for testing
-// (Tests the contract; real implementation in
-//  frontend/src/components/ResumePrompt/ResumePrompt.tsx)
-// ---------------------------------------------------------------------------
-
-interface ResumePromptProps {
-  brickCount: number;
-  lastSavedAt: number;
-  onResume: () => void;
-  onDiscard: () => void;
-}
-
-function ResumePrompt({ brickCount, lastSavedAt, onResume, onDiscard }: ResumePromptProps) {
-  const savedTime = new Date(lastSavedAt).toLocaleTimeString();
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="resume-prompt-title"
-      data-testid="resume-prompt"
-    >
-      <h2 id="resume-prompt-title">Resume your session?</h2>
-      <p>
-        Your last session was auto-saved with{' '}
-        <span data-testid="resume-prompt-brick-count">{brickCount}</span> brick
-        {brickCount !== 1 ? 's' : ''} at {savedTime}.
-      </p>
-      <button data-testid="resume-btn" onClick={onResume}>
-        Resume
-      </button>
-      <button data-testid="discard-btn" onClick={onDiscard}>
-        Discard
-      </button>
-    </div>
-  );
-}
+// M1 FIX: Import real production component
+import { ResumePrompt } from '../../src/components/ResumePrompt/ResumePrompt';
 
 // ---------------------------------------------------------------------------
 // Tests

@@ -90,8 +90,9 @@ export async function saveSnapshot(input: SaveSnapshotInput): Promise<string> {
   let existingMeta: AutoSaveMeta | undefined;
   try {
     existingMeta = await db.get('auto-save-meta', input.sessionId);
-  } catch {
-    // First save for this session
+  } catch (err: unknown) {
+    // M2 FIX: Log warning instead of silently swallowing
+    console.warn('[persistenceService] Could not read existing meta:', err);
   }
 
   const meta: AutoSaveMeta = {

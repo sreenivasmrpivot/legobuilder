@@ -102,8 +102,9 @@ export const usePersistenceStore = create<PersistenceState>((set, get) => ({
     const { sessionId } = get();
     try {
       await closeSession(sessionId);
-    } catch {
-      // Best-effort on unload — don't throw
+    } catch (err: unknown) {
+      // M3 FIX: Best-effort on unload — log but don't throw
+      console.warn('[persistenceStore] markSessionClosed failed:', err);
     }
   },
 
@@ -116,8 +117,9 @@ export const usePersistenceStore = create<PersistenceState>((set, get) => ({
           isRecoveryPromptVisible: true,
         });
       }
-    } catch {
-      // Silently fail — don't block app startup
+    } catch (err: unknown) {
+      // M3 FIX: Log but don't block app startup
+      console.warn('[persistenceStore] checkForCrashRecovery failed:', err);
     }
   },
 
@@ -134,7 +136,9 @@ export const usePersistenceStore = create<PersistenceState>((set, get) => ({
         sessionId: recoveryCandidate.sessionId,
       });
       return snapshot;
-    } catch {
+    } catch (err: unknown) {
+      // M3 FIX: Log recovery failure
+      console.warn('[persistenceStore] resumeSession failed:', err);
       set({ isRecoveryPromptVisible: false, recoveryCandidate: null });
       return null;
     }
@@ -146,8 +150,9 @@ export const usePersistenceStore = create<PersistenceState>((set, get) => ({
 
     try {
       await discardRecovery(recoveryCandidate);
-    } catch {
-      // Best-effort purge
+    } catch (err: unknown) {
+      // M3 FIX: Log discard failure
+      console.warn('[persistenceStore] discardSession failed:', err);
     }
     set({ isRecoveryPromptVisible: false, recoveryCandidate: null });
   },

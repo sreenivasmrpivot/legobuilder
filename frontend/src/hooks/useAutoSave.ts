@@ -2,7 +2,8 @@
  * useAutoSave Hook — NFR-REL-001
  *
  * Interval-based auto-save with beforeunload listener for graceful
- * session close. Uses the persistenceStore for save operations.
+ * session close. Reads actual scene state from sceneStore on each
+ * interval tick and persists via the persistenceStore.
  *
  * Contract tested by:
  *   T-UNIT-REL-001-06  beforeunload listener registration and cleanup
@@ -13,6 +14,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { usePersistenceStore } from '../stores/persistenceStore';
+import { useSceneStore } from '../stores/sceneStore';
 
 export const AUTO_SAVE_INTERVAL_MS = 5_000;
 
@@ -42,11 +44,21 @@ export function useAutoSave(intervalMs = AUTO_SAVE_INTERVAL_MS): void {
       if (isSavingRef.current) return;
       isSavingRef.current = true;
       try {
-        await triggerAutoSave(
-          [], // Bricks will be read from sceneStore at call time
-          { position: [0, 10, 20], target: [0, 0, 0], zoom: 1 },
-          { name: 'Untitled', createdAt: Date.now(), lastModifiedAt: Date.now() },
-        );
+        // B1 FIX: Read actual scene state from sceneStore
+        const sceneState = useSceneStore.getState();
+        const bricks = sceneState.bricks ?? [];
+        const cameraState = sceneState.cameraState ?? {
+          position: [0, 10, 20] as [number, number, number],
+          target: [0, 0, 0] as [number, number, number],
+          zoom: 1,
+        };
+        const sceneMetadata = sceneState.sceneMetadata ?? {
+          name: 'Untitled',
+          createdAt: Date.now(),
+          lastModifiedAt: Date.now(),
+        };
+
+        await triggerAutoSave(bricks, cameraState, sceneMetadata);
       } finally {
         isSavingRef.current = false;
       }

@@ -4,6 +4,10 @@
  * Test ID:
  *   T-UNIT-REL-001-06  useAutoSave registers beforeunload listener
  *
+ * M1 FIX: Now imports the real production useAutoSave hook instead
+ * of defining an inline stub. The persistenceStore and sceneStore
+ * are mocked to isolate the hook's behavior.
+ *
  * Spectra-Agent: frontend-test
  * Spectra-FRs: NFR-REL-001
  * Spectra-Tests: T-UNIT-REL-001-06
@@ -12,7 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 // ---------------------------------------------------------------------------
-// Mock the persistenceStore
+// Mock the persistenceStore and sceneStore
 // ---------------------------------------------------------------------------
 
 const mockTriggerAutoSave = vi.fn().mockResolvedValue(undefined);
@@ -26,40 +30,23 @@ vi.mock('../../src/stores/persistenceStore', () => ({
   }),
 }));
 
+vi.mock('../../src/stores/sceneStore', () => ({
+  useSceneStore: {
+    getState: () => ({
+      bricks: [
+        { id: 'brick-1', type: '2x4', position: [0, 0, 0], rotation: [0, 0, 0, 1], color: '#FF0000' },
+      ],
+      cameraState: { position: [0, 10, 20], target: [0, 0, 0], zoom: 1 },
+      sceneMetadata: { name: 'Test Scene', createdAt: 1000, lastModifiedAt: 2000 },
+    }),
+  },
+}));
+
 // ---------------------------------------------------------------------------
-// Minimal useAutoSave implementation for testing
-// (Tests the contract; real implementation in frontend/src/hooks/useAutoSave.ts)
+// M1 FIX: Import real production hook
 // ---------------------------------------------------------------------------
 
-import { useEffect, useRef } from 'react';
-
-export const AUTO_SAVE_INTERVAL_MS = 5_000;
-
-function useAutoSave(intervalMs = AUTO_SAVE_INTERVAL_MS): void {
-  const isSavingRef = useRef(false);
-
-  useEffect(() => {
-    const handleBeforeUnload = (): void => {
-      mockMarkSessionClosed();
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    const intervalId = setInterval(async () => {
-      if (isSavingRef.current) return;
-      isSavingRef.current = true;
-      try {
-        await mockTriggerAutoSave();
-      } finally {
-        isSavingRef.current = false;
-      }
-    }, intervalMs);
-
-    return () => {
-      clearInterval(intervalId);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [intervalMs]);
-}
+import { useAutoSave } from '../../src/hooks/useAutoSave';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -163,5 +150,22 @@ describe('useAutoSave — interval-based auto-save', () => {
     });
 
     expect(mockTriggerAutoSave).toHaveBeenCalledTimes(3);
+  });
+
+  it('passes actual scene state from sceneStore to triggerAutoSave', async () => {
+    renderHook(() => useAutoSave(5_000));
+
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+
+    // Verify triggerAutoSave was called with real scene data, not empty arrays
+    expect(mockTriggerAutoSave).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'brick-1' }),
+      ]),
+      expect.objectContaining({ position: [0, 10, 20] }),
+      expect.objectContaining({ name: 'Test Scene' }),
+    );
   });
 });
