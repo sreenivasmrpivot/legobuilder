@@ -1,24 +1,30 @@
 /**
- * IndexedDB Schema Definition for LegoBuilder Auto-Save
+ * IndexedDB Schema for LegoBuilder Auto-Save
  *
- * Defines the database schema, types, and helper to open the database.
- * Uses the `idb` library for a Promise-based IndexedDB API.
+ * Database: legobuilder-v1
+ * Stores:
+ *   - scene-snapshots: Full scene state snapshots
+ *   - auto-save-meta: Session metadata for crash detection
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
  */
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+
+import { openDB, type IDBPDatabase } from 'idb';
 
 // ---------------------------------------------------------------------------
-// Schema Version
+// Constants
 // ---------------------------------------------------------------------------
 
-export const CURRENT_SCHEMA_VERSION = 1;
 export const DB_NAME = 'legobuilder-v1';
 export const DB_VERSION = 1;
+export const SCENE_SNAPSHOTS_STORE = 'scene-snapshots';
+export const AUTO_SAVE_META_STORE = 'auto-save-meta';
+export const CURRENT_SCHEMA_VERSION = 1;
+export const MAX_RETAINED_SNAPSHOTS = 10;
 
 // ---------------------------------------------------------------------------
-// Record Types (LLD Section 3.1)
+// Types
 // ---------------------------------------------------------------------------
 
 export interface BrickRecord {
@@ -60,31 +66,16 @@ export interface AutoSaveMeta {
   status: 'active' | 'closed';
 }
 
-// ---------------------------------------------------------------------------
-// IDB Schema (typed for `idb` library)
-// ---------------------------------------------------------------------------
-
-export interface LegoBuilderDB extends DBSchema {
-  'scene-snapshots': {
-    key: string;
-    value: SceneSnapshot;
-    indexes: {
-      sessionId: string;
-      timestamp: number;
-    };
-  };
-  'auto-save-meta': {
-    key: string;
-    value: AutoSaveMeta;
-    indexes: {
-      lastSavedAt: number;
-      status: string;
-    };
-  };
+export interface RecoveryCandidate {
+  sessionId: string;
+  snapshotId: string;
+  brickCount: number;
+  lastSavedAt: number;
+  appVersion: string;
 }
 
 // ---------------------------------------------------------------------------
-// Error Types (LLD Section 6)
+// Error Types
 // ---------------------------------------------------------------------------
 
 export enum PersistenceErrorCode {
@@ -107,24 +98,24 @@ export class PersistenceError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Database Open Helper
+// Database Connection
 // ---------------------------------------------------------------------------
 
-let dbInstance: IDBPDatabase<LegoBuilderDB> | null = null;
+let dbInstance: IDBPDatabase | null = null;
 
 /**
- * Opens (or returns cached) the LegoBuilder IndexedDB database.
- * Creates object stores and indexes on first open / upgrade.
+ * Opens (or returns cached) the legobuilder-v1 IndexedDB database.
+ * Creates object stores and indexes on first open / version upgrade.
  */
-export async function getDB(): Promise<IDBPDatabase<LegoBuilderDB>> {
+export async function getDB(): Promise<IDBPDatabase> {
   if (dbInstance) return dbInstance;
 
   try {
-    dbInstance = await openDB<LegoBuilderDB>(DB_NAME, DB_VERSION, {
+    dbInstance = await openDB(DB_NAME, DB_VERSION, {
       upgrade(db) {
         // scene-snapshots store
-        if (!db.objectStoreNames.contains('scene-snapshots')) {
-          const snapStore = db.createObjectStore('scene-snapshots', {
+        if (!db.objectStoreNames.contains(SCENE_SNAPSHOTS_STORE)) {
+          const snapStore = db.createObjectStore(SCENE_SNAPSHOTS_STORE, {
             keyPath: 'snapshotId',
           });
           snapStore.createIndex('sessionId', 'sessionId', { unique: false });
@@ -132,8 +123,8 @@ export async function getDB(): Promise<IDBPDatabase<LegoBuilderDB>> {
         }
 
         // auto-save-meta store
-        if (!db.objectStoreNames.contains('auto-save-meta')) {
-          const metaStore = db.createObjectStore('auto-save-meta', {
+        if (!db.objectStoreNames.contains(AUTO_SAVE_META_STORE)) {
+          const metaStore = db.createObjectStore(AUTO_SAVE_META_STORE, {
             keyPath: 'sessionId',
           });
           metaStore.createIndex('lastSavedAt', 'lastSavedAt', { unique: false });
@@ -145,7 +136,7 @@ export async function getDB(): Promise<IDBPDatabase<LegoBuilderDB>> {
     return dbInstance;
   } catch (error) {
     throw new PersistenceError(
-      'Failed to open IndexedDB database',
+      'Failed to open IndexedDB',
       PersistenceErrorCode.DB_OPEN_FAILED,
       error,
     );
@@ -153,8 +144,7 @@ export async function getDB(): Promise<IDBPDatabase<LegoBuilderDB>> {
 }
 
 /**
- * Close and reset the cached DB instance.
- * Useful for testing and cleanup.
+ * Close the cached database connection. Used in tests and cleanup.
  */
 export function closeDB(): void {
   if (dbInstance) {
