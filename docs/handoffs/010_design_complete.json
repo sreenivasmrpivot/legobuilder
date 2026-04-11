@@ -1,0 +1,56 @@
+{
+  "handoff_id": "010_design_complete",
+  "from_agent": "design-agent",
+  "to_agent": "gate-6a-design-review",
+  "timestamp": "2026-04-11T00:00:00Z",
+  "status": "complete",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "app_id": "app-legobuilder-20260410",
+  "summary": "Design agent completed Low-Level Design for FR-BRICK-002 (Issue #10) — Implement brick stacking with correct vertical snap-to-top-surface positioning. LLD covers: 3D occupancy map upgrade (StudKey3D, getTopLayerAt), placementEngine.resolveStackingPosition() using BVH raycast top-face detection, stacking Y formula (resolvedY = hitSurfaceY + halfHeight), GhostBrick.tsx new component, sceneStore ghostPosition state, useBrickPlacement stacking integration, 4 Mermaid sequence diagrams (happy path, side-face guard, collision guard, 4-brick stack), error handling matrix (7 scenarios), security considerations (5 items), performance strategy (BVH + O(1) map), test case mapping (T-BE-BRICK-002-01 through T-E2E-BRICK-002-01 with 4 unit test scenarios). Draft PR is open on branch feature/10-fr-brick-002-design awaiting Gate 6a human design review. Area determined as frontend (pure client-side SPA, React/Three.js/Zustand/Vitest toolchain). Depends on FR-BRICK-001 (Issue #12) and FR-SCENE-003 (Issue #9).",
+  "workflow_state": {
+    "current_phase": "design_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design"],
+    "remaining_phases": ["gate-6a-design-review", "frontend-test", "frontend-coding", "review", "release"]
+  },
+  "artifacts": [
+    {
+      "name": "Low-Level Design: FR-BRICK-002",
+      "path": "docs/features/FR-BRICK-002/LOW_LEVEL_DESIGN.md",
+      "type": "design-doc",
+      "description": "Full LLD for brick stacking: 3D occupancy map upgrade, resolveStackingPosition() algorithm, stacking Y formula, GhostBrick component, 4 sequence diagrams, error handling, security, performance, test mapping, and 5 open questions"
+    }
+  ],
+  "human_review_required": [
+    "[HIGH] Gate 6a Design Review — Draft PR must be reviewed and approved by a human before implementation begins. The LLD defines the resolveStackingPosition() algorithm, 3D occupancy map upgrade, and stacking Y formula.",
+    "[HIGH] OQ-1: Confirm exact STUD_SPACING, PLATE_HEIGHT, BRICK_HEIGHT values from FR-BRICK-001 LLD — all Y-position calculations depend on these constants.",
+    "[HIGH] OQ-2: Confirm FR-BRICK-001 exposes BrickMesh with userData.isBrick=true and userData.brickInstance — useBrickPlacement raycast filter depends on this convention.",
+    "[HIGH] OQ-3: Confirm whether @react-three/drei BVH geometry is already integrated in FR-SCENE-003 or FR-BRICK-001 — if not, FR-BRICK-002 must add BVH setup.",
+    "[MEDIUM] OQ-4: Confirm ghost brick behaviour on collision — red ghost (better UX) vs disappear (current LLD). Red ghost requires validatePlacement on every pointer move.",
+    "[LOW] OQ-5: Confirm crypto.randomUUID() availability in target browser baseline."
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Review Draft PR on branch feature/10-fr-brick-002-design — this is Gate 6a (Design Review)",
+      "Verify LLD at docs/features/FR-BRICK-002/LOW_LEVEL_DESIGN.md is consistent with docs/TECHNICAL_ARCHITECTURE.md and docs/PRD.md",
+      "Confirm FR-BRICK-001 (Issue #12) and FR-SCENE-003 (Issue #9) are implemented before FR-BRICK-002 implementation begins",
+      "Confirm exact STUD_SPACING, PLATE_HEIGHT, BRICK_HEIGHT values from FR-BRICK-001 LLD (OQ-1)",
+      "Confirm BrickMesh userData convention from FR-BRICK-001 (OQ-2)",
+      "Confirm BVH geometry integration status from FR-SCENE-003/FR-BRICK-001 (OQ-3)",
+      "Confirm ghost brick collision behaviour — red vs disappear (OQ-4)",
+      "Approve and merge Draft PR to main to unblock frontend-test and frontend coding agents",
+      "On approval, frontend-test agent should read the merged LLD from main before writing tests",
+      "Note: area=frontend — all subsequent agents for FR-BRICK-002 are frontend-test and frontend coding agents"
+    ],
+    "files_to_read": [
+      "docs/features/FR-BRICK-002/LOW_LEVEL_DESIGN.md",
+      "docs/features/FR-BRICK-001/LOW_LEVEL_DESIGN.md",
+      "frontend/src/engine/occupancyMap.ts",
+      "frontend/src/engine/placementEngine.ts",
+      "frontend/src/engine/brickCatalog.ts",
+      "frontend/src/types/brick.ts",
+      "frontend/src/stores/sceneStore.ts",
+      "frontend/src/hooks/useBrickPlacement.ts"
+    ]
+  }
+}
