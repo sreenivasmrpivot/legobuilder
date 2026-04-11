@@ -1,29 +1,75 @@
 /**
- * Hook: useAutoSave
+ * useAutoSave Hook — NFR-REL-001 Auto-Save Crash Durability
  *
- * Debounced auto-save (5s interval) that persists the current scene
- * to IndexedDB whenever bricks change.
+ * Implements the auto-save interval and beforeunload handler
+ * defined in LLD Section 6.
  *
- * This is a scaffold stub. Feature implementation will be done in
- * feature branches per the PM-Issues agent's issue plan.
+ * - Saves scene snapshot to IndexedDB every 30 seconds (configurable)
+ * - Registers beforeunload handler to mark session as 'closed'
+ * - Cleans up interval and event listener on unmount
+ *
+ * Spectra-Agent: frontend-coding
+ * Spectra-FRs: NFR-REL-001
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
+import { persistenceService } from '../services/persistenceService';
 
-const AUTO_SAVE_INTERVAL_MS = 5000;
+const AUTO_SAVE_INTERVAL_MS = 30_000; // 30 seconds per LLD Section 9
 
-export function useAutoSave() {
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
-
-  useEffect(() => {
-    // TODO: Implement in feature branch
-    // 1. Subscribe to scene store changes
-    // 2. Debounce with AUTO_SAVE_INTERVAL_MS
-    // 3. Serialize scene and save via persistenceService
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
-
-  return { autoSaveInterval: AUTO_SAVE_INTERVAL_MS };
+export interface UseAutoSaveOptions {
+  /** Unique session identifier */
+  sessionId: string;
+  /** Function that returns the current scene state to persist */
+  getSceneSnapshot: () => object;
+  /** Optional error callback for save failures */
+  onSaveError?: (error: Error) => void;
+  /** Override the default 30s interval (mainly for testing) */
+  intervalMs?: number;
 }
+
+export function useAutoSave(options: UseAutoSaveOptions) {
+  const {
+    sessionId,
+    getSceneSnapshot,
+    onSaveError,
+    intervalMs = AUTO_SAVE_INTERVAL_MS,
+  } = options;
+
+  const saveCountRef = useRef(0);
+  const lastSaveRef = useRef<number | null>(null);
+
+  const triggerSave = useCallback(async () => {
+    try {
+      const snapshot = getSceneSnapshot();
+      await persistenceService.saveSnapshot(sessionId, snapshot);
+      saveCountRef.current += 1;
+      lastSaveRef.current = Date.now();
+    } catch (e) {
+      onSaveError?.(e as Error);
+    }
+  }, [sessionId, getSceneSnapshot, onSaveError]);
+
+  // Set up the auto-save interval
+  useEffect(() => {
+    const id = setInterval(triggerSave, intervalMs);
+    return () => clearInterval(id);
+  }, [triggerSave, intervalMs]);
+
+  // Register beforeunload handler to mark session as closed on graceful exit
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      persistenceService.markSessionClosed(sessionId);
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [sessionId]);
+
+  return {
+    triggerSave,
+    saveCount: saveCountRef,
+    lastSave: lastSaveRef,
+  };
+}
+
+export default useAutoSave;
