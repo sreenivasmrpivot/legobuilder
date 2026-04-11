@@ -1,0 +1,135 @@
+{
+  "handoff_id": "020_frontend-test_complete",
+  "from_agent": "frontend-test",
+  "to_agent": "frontend-coding",
+  "timestamp": "2026-04-11T05:55:00Z",
+  "status": "complete",
+  "event": {
+    "event_id": "evt-nfr-rel-001-frontend-test-complete",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "wf-app-legobuilder-20260410",
+    "causation_id": "evt-006-design-complete"
+  },
+  "state_ref": {
+    "request_id": "31c4d9ce-ebf8-4bd8-b4b6-a6de18b48c23",
+    "workflow_state_uri": "docs/handoffs/020_frontend-test_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "app_id": "app-legobuilder-20260410",
+    "repo": "sreenivasmrpivot/legobuilder"
+  },
+  "artifacts": [
+    {
+      "name": "crashRecovery-e2e-spec",
+      "path": "frontend/tests/e2e/crashRecovery.spec.ts",
+      "type": "test",
+      "description": "Playwright E2E tests: T-BE-REL-001-01 (crash + recovery) and T-BE-REL-001-02 (graceful close)"
+    },
+    {
+      "name": "persistenceService-unit-tests",
+      "path": "frontend/src/services/persistenceService.test.ts",
+      "type": "test",
+      "description": "Vitest unit tests: T-UNIT-REL-001-01 (atomic write), T-UNIT-REL-001-04 (quota error), T-UNIT-REL-001-07 (snapshot pruning)"
+    },
+    {
+      "name": "crashRecoveryService-unit-tests",
+      "path": "frontend/tests/unit/crashRecoveryService.test.ts",
+      "type": "test",
+      "description": "Vitest unit tests: T-UNIT-REL-001-02 (detectOrphanedSession active), T-UNIT-REL-001-03 (detectOrphanedSession closed)"
+    },
+    {
+      "name": "useAutoSave-unit-tests",
+      "path": "frontend/tests/unit/useAutoSave.test.ts",
+      "type": "test",
+      "description": "Vitest unit tests: T-UNIT-REL-001-05 (30s debounce), T-UNIT-REL-001-06 (concurrent write guard)"
+    },
+    {
+      "name": "ResumePrompt-component-tests",
+      "path": "frontend/tests/component/ResumePrompt.test.tsx",
+      "type": "test",
+      "description": "Vitest component test: T-UNIT-REL-001-08 (ARIA attributes, dialog role, button labels, interaction)"
+    },
+    {
+      "name": "test-pr",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/71",
+      "type": "pull_request",
+      "description": "Draft PR #71 — Gate 7 Frontend Test Review for NFR-REL-001"
+    }
+  ],
+  "summary": {
+    "work_completed": "Authored all 10 test cases for NFR-REL-001 Auto-Save Crash Durability: 2 Playwright E2E tests (T-BE-REL-001-01/02) and 8 Vitest unit/component tests (T-UNIT-REL-001-01 through 08). Tests are contract-first: they define the acceptance criteria the coding agent must satisfy. PR #71 is open as a Draft on branch feature/30-nfr-rel-001-tests awaiting Gate 7 human review.",
+    "key_findings": [
+      "All 10 LLD test cases are covered across 5 test files",
+      "fake-indexeddb/auto used for all IndexedDB unit tests (jsdom limitation)",
+      "vi.useFakeTimers() used for deterministic 30s debounce testing",
+      "Concurrent write guard tested via unresolved Promise pattern",
+      "ResumePrompt ARIA contract validated: role=dialog, aria-modal, aria-labelledby, aria-describedby",
+      "E2E crash simulation uses browser.close({ runBeforeUnload: false }) per LLD"
+    ],
+    "metrics": {
+      "test_files": 5,
+      "test_cases_total": 10,
+      "e2e_tests": 2,
+      "unit_tests": 7,
+      "component_tests": 1,
+      "fr_ids": ["NFR-REL-001", "FR-18"]
+    }
+  },
+  "human_review_required": [
+    {
+      "item": "Gate 7: PR #71 requires human design review before merge",
+      "reason": "Test contracts define the coding agent's acceptance criteria — human must verify test coverage is complete and correct before implementation begins",
+      "severity": "high"
+    },
+    {
+      "item": "LLD PR #48 (design-agent) is still a Draft — must be merged to main before coding agent begins",
+      "reason": "The coding agent reads the approved LLD from main; PR #48 must be approved and merged at Gate 6a first",
+      "severity": "high"
+    },
+    {
+      "item": "Verify fake-indexeddb is in package.json devDependencies",
+      "reason": "Tests import fake-indexeddb/auto; if not present, CI will fail with module not found",
+      "severity": "medium"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Wait for Gate 7 approval of PR #71 (this PR) before starting implementation",
+      "Wait for Gate 6a approval and merge of PR #48 (LLD) before starting implementation",
+      "Read the approved LLD from main: docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
+      "Implement src/services/persistenceService.ts to pass T-UNIT-REL-001-01/04/07",
+      "Implement src/services/crashRecoveryService.ts to pass T-UNIT-REL-001-02/03",
+      "Implement src/hooks/useAutoSave.ts to pass T-UNIT-REL-001-05/06",
+      "Implement src/components/ResumePrompt.tsx to pass T-UNIT-REL-001-08",
+      "Implement the full crash recovery flow to pass E2E tests T-BE-REL-001-01/02",
+      "Reuse branch feature/30-nfr-rel-001-tests (do not create a new branch)"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
+      "frontend/tests/e2e/crashRecovery.spec.ts",
+      "frontend/src/services/persistenceService.test.ts",
+      "frontend/tests/unit/crashRecoveryService.test.ts",
+      "frontend/tests/unit/useAutoSave.test.ts",
+      "frontend/tests/component/ResumePrompt.test.tsx",
+      "frontend/src/services/persistenceService.ts",
+      "frontend/src/hooks/useAutoSave.ts",
+      "frontend/src/stores/sceneStore.ts",
+      "frontend/package.json"
+    ]
+  },
+  "workflow_state": {
+    "workflow_type": "greenfield",
+    "current_phase": "implementation",
+    "completed_phases": ["entry", "research", "planning", "architecture", "design", "frontend-test"],
+    "remaining_phases": ["frontend-coding", "review", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-031"],
+    "forward_pass_score": 0.94,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
