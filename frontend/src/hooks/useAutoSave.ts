@@ -2,12 +2,13 @@
  * useAutoSave Hook — Interval-based auto-save with beforeunload cleanup
  *
  * Registers a periodic auto-save interval and a beforeunload listener
- * that marks the session as closed on graceful tab close.
+ * that marks the session as closed on graceful shutdown.
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
  * Spectra-Tests: T-UNIT-REL-001-06
  */
+
 import { useEffect, useRef } from 'react';
 import { usePersistenceStore } from '../stores/persistenceStore';
 
@@ -22,9 +23,11 @@ export const AUTO_SAVE_INTERVAL_MS = 5_000;
 // ---------------------------------------------------------------------------
 
 /**
- * Starts an auto-save interval that periodically persists the current scene
- * to IndexedDB. Also registers a `beforeunload` listener to mark the session
- * as closed on graceful tab close.
+ * Auto-save hook that:
+ * 1. Sets up a periodic interval to trigger auto-save.
+ * 2. Registers a `beforeunload` listener to mark the session as closed
+ *    on graceful tab/window close.
+ * 3. Cleans up both on unmount.
  *
  * @param intervalMs - Auto-save interval in milliseconds (default: 5000)
  */
@@ -33,32 +36,24 @@ export function useAutoSave(intervalMs = AUTO_SAVE_INTERVAL_MS): void {
   const { triggerAutoSave, markSessionClosed } = usePersistenceStore();
 
   useEffect(() => {
-    // Register beforeunload handler for graceful close detection
+    // --- beforeunload listener ---
     const handleBeforeUnload = (): void => {
       markSessionClosed();
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
 
-    // Start periodic auto-save interval
+    // --- Auto-save interval ---
     const intervalId = setInterval(async () => {
       if (isSavingRef.current) return;
       isSavingRef.current = true;
       try {
-        await triggerAutoSave({
-          bricks: [],
-          cameraState: { position: [0, 10, 20], target: [0, 0, 0], zoom: 1 },
-          sceneMetadata: {
-            name: 'Untitled',
-            createdAt: Date.now(),
-            lastModifiedAt: Date.now(),
-          },
-        });
+        await triggerAutoSave();
       } finally {
         isSavingRef.current = false;
       }
     }, intervalMs);
 
-    // Cleanup on unmount
+    // --- Cleanup ---
     return () => {
       clearInterval(intervalId);
       window.removeEventListener('beforeunload', handleBeforeUnload);

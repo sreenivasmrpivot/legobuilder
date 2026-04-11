@@ -1,162 +1,155 @@
 /**
- * Crash Recovery Service — Boot-time crash detection
+ * Crash Recovery Service — boot-time crash detection
  *
- * Detects orphaned active sessions in IndexedDB that indicate a previous
- * browser crash (session was never marked 'closed'). Returns a recovery
- * candidate with brick count and metadata for the ResumePrompt.
+ * Detects orphaned active sessions in IndexedDB that indicate a
+ * previous crash or ungraceful shutdown. Returns a RecoveryCandidate
+ * if a recoverable session is found.
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
  * Spectra-Tests: T-UNIT-REL-001-02, T-UNIT-REL-001-03, T-UNIT-REL-001-08
  */
+
 import {
-  getDB,
-  PersistenceError,
-  PersistenceErrorCode,
-  CURRENT_SCHEMA_VERSION,
-  type SceneSnapshot,
   type AutoSaveMeta,
+  type RecoveryCandidate,
+  type SceneSnapshot,
+  CURRENT_SCHEMA_VERSION,
+  STORE_AUTO_SAVE_META,
+  STORE_SCENE_SNAPSHOTS,
+  isValidSnapshot,
+  openDatabase,
 } from './dbSchema';
 import { purgeSession } from './persistenceService';
 
 // ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface RecoveryCandidate {
-  sessionId: string;
-  snapshotId: string;
-  brickCount: number;
-  lastSavedAt: number;
-  appVersion: string;
-}
-
-// ---------------------------------------------------------------------------
-// detectCrash() — Boot-time crash detection (LLD Section 4.3)
+// Public API
 // ---------------------------------------------------------------------------
 
 /**
- * Scans IndexedDB for active sessions that were never closed (orphans).
- * Returns the most recently saved recovery candidate, or null if none found.
+ * Detect if a previous session crashed (left in 'active' status).
  *
- * Validates snapshot integrity:
- * - bricks must be an array
- * - schemaVersion must be <= CURRENT_SCHEMA_VERSION
+ * Algorithm:
+ * 1. Query all sessions with status='active' from auto-save-meta.
+ * 2. If none found, return null (no crash detected).
+ * 3. Pick the most recently saved active session.
+ * 4. Load its latest snapshot and validate it.
+ * 5. If snapshot is missing or corrupted, purge and return null.
+ * 6. If snapshot schema version is incompatible, purge and return null.
+ * 7. Return a RecoveryCandidate with session details.
  *
- * Corrupted or incompatible snapshots are purged automatically.
+ * @param db - Optional IDBDatabase instance (for testing). If not provided,
+ *             opens the default database.
+ * @returns RecoveryCandidate or null if no crash detected
  */
-export async function detectCrash(): Promise<RecoveryCandidate | null> {
-  try {
-    const db = await getDB();
+export async function detectCrash(
+  db?: IDBDatabase,
+): Promise<RecoveryCandidate | null> {
+  const database = db ?? (await openDatabase());
 
-    // 1. Find all active sessions
-    const tx = db.transaction(['auto-save-meta', 'scene-snapshots'], 'readonly');
-    const metaIndex = tx.objectStore('auto-save-meta').index('status');
-    const activeSessions = await metaIndex.getAll('active');
+  // 1. Find all active sessions
+  const activeSessions = await getActiveSessions(database);
 
-    if (activeSessions.length === 0) return null;
+  if (activeSessions.length === 0) return null;
 
-    // 2. Sort by lastSavedAt descending (most recent first)
-    const sorted = activeSessions.sort((a, b) => b.lastSavedAt - a.lastSavedAt);
+  // 2. Pick the most recently saved session
+  const mostRecent = activeSessions.sort(
+    (a, b) => b.lastSavedAt - a.lastSavedAt,
+  )[0];
 
-    // 3. Try each active session until we find a valid one
-    for (const meta of sorted) {
-      const snapshot = await tx.objectStore('scene-snapshots').get(meta.latestSnapshotId);
+  // 3. Load the snapshot
+  const snapshot = await getSnapshot(database, mostRecent.latestSnapshotId);
 
-      // No snapshot found for this meta — orphaned meta, skip
-      if (!snapshot) continue;
-
-      // Validate snapshot integrity
-      if (!isValidSnapshot(snapshot)) {
-        // Corrupted data — purge this session asynchronously
-        // (don't await in the read transaction)
-        void purgeCorruptedSession(meta.sessionId, meta.latestSnapshotId);
-        continue;
-      }
-
-      return {
-        sessionId: meta.sessionId,
-        snapshotId: meta.latestSnapshotId,
-        brickCount: snapshot.bricks.length,
-        lastSavedAt: meta.lastSavedAt,
-        appVersion: meta.appVersion,
-      };
+  // 4. Validate snapshot exists
+  if (!snapshot) {
+    // Orphaned meta without snapshot — purge it
+    if (!db) {
+      await purgeSession(mostRecent.sessionId);
     }
-
     return null;
-  } catch (error) {
-    throw new PersistenceError(
-      'Failed to detect crash recovery candidate',
-      PersistenceErrorCode.RECOVERY_FAILED,
-      error,
-    );
   }
+
+  // 5. Validate snapshot integrity
+  if (!isValidSnapshot(snapshot)) {
+    // Corrupted snapshot — purge the session
+    if (!db) {
+      await purgeSession(mostRecent.sessionId);
+    }
+    return null;
+  }
+
+  // 6. Validate schema compatibility
+  if (snapshot.schemaVersion > CURRENT_SCHEMA_VERSION) {
+    // Future schema version — incompatible, purge
+    if (!db) {
+      await purgeSession(mostRecent.sessionId);
+    }
+    return null;
+  }
+
+  // 7. Return recovery candidate
+  return {
+    sessionId: mostRecent.sessionId,
+    snapshotId: mostRecent.latestSnapshotId,
+    brickCount: snapshot.bricks.length,
+    lastSavedAt: mostRecent.lastSavedAt,
+    appVersion: mostRecent.appVersion,
+  };
 }
 
-// ---------------------------------------------------------------------------
-// restoreSession() — Load snapshot data for recovery
-// ---------------------------------------------------------------------------
-
 /**
- * Loads the full scene snapshot for a recovery candidate.
- * Returns the snapshot data to be loaded into the scene store.
+ * Accept a recovery candidate: restore the session data and mark it
+ * as the current active session.
+ *
+ * @param candidate - The recovery candidate to accept
+ * @returns The restored SceneSnapshot
  */
-export async function restoreSession(
-  snapshotId: string,
+export async function acceptRecovery(
+  candidate: RecoveryCandidate,
 ): Promise<SceneSnapshot | null> {
-  const db = await getDB();
-  const snapshot = await db.get('scene-snapshots', snapshotId);
-  return snapshot ?? null;
-}
+  const db = await openDatabase();
 
-// ---------------------------------------------------------------------------
-// discardRecovery() — User chose to discard
-// ---------------------------------------------------------------------------
+  const snapshot = await getSnapshot(db, candidate.snapshotId);
+  if (!snapshot || !isValidSnapshot(snapshot)) return null;
 
-/**
- * Purges all data for a recovered session when the user clicks "Discard".
- */
-export async function discardRecovery(sessionId: string): Promise<void> {
-  await purgeSession(sessionId);
-}
-
-// ---------------------------------------------------------------------------
-// Validation Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Validates that a snapshot is structurally sound and compatible.
- */
-function isValidSnapshot(snapshot: unknown): snapshot is SceneSnapshot {
-  if (snapshot === null || typeof snapshot !== 'object') return false;
-
-  const s = snapshot as Record<string, unknown>;
-
-  // bricks must be an array
-  if (!Array.isArray(s.bricks)) return false;
-
-  // schemaVersion must be a number and <= current version
-  if (typeof s.schemaVersion !== 'number') return false;
-  if (s.schemaVersion > CURRENT_SCHEMA_VERSION) return false;
-
-  return true;
+  return snapshot;
 }
 
 /**
- * Purges a corrupted session (meta + snapshot) from IndexedDB.
+ * Discard a recovery candidate: purge the crashed session data.
+ *
+ * @param candidate - The recovery candidate to discard
  */
-async function purgeCorruptedSession(
-  sessionId: string,
-  snapshotId: string,
+export async function discardRecovery(
+  candidate: RecoveryCandidate,
 ): Promise<void> {
-  try {
-    const db = await getDB();
-    const tx = db.transaction(['scene-snapshots', 'auto-save-meta'], 'readwrite');
-    await tx.objectStore('scene-snapshots').delete(snapshotId);
-    await tx.objectStore('auto-save-meta').delete(sessionId);
-    await tx.done;
-  } catch {
-    // Silently fail — corruption cleanup is best-effort
-    console.warn(`Failed to purge corrupted session ${sessionId}`);
-  }
+  await purgeSession(candidate.sessionId);
+}
+
+// ---------------------------------------------------------------------------
+// Internal Helpers
+// ---------------------------------------------------------------------------
+
+async function getActiveSessions(
+  db: IDBDatabase,
+): Promise<AutoSaveMeta[]> {
+  return new Promise<AutoSaveMeta[]>((resolve, reject) => {
+    const tx = db.transaction(STORE_AUTO_SAVE_META, 'readonly');
+    const index = tx.objectStore(STORE_AUTO_SAVE_META).index('status');
+    const req = index.getAll(IDBKeyRange.only('active'));
+    req.onsuccess = () => resolve(req.result as AutoSaveMeta[]);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function getSnapshot(
+  db: IDBDatabase,
+  snapshotId: string,
+): Promise<SceneSnapshot | undefined> {
+  return new Promise<SceneSnapshot | undefined>((resolve, reject) => {
+    const tx = db.transaction(STORE_SCENE_SNAPSHOTS, 'readonly');
+    const req = tx.objectStore(STORE_SCENE_SNAPSHOTS).get(snapshotId);
+    req.onsuccess = () => resolve(req.result as SceneSnapshot | undefined);
+    req.onerror = () => reject(req.error);
+  });
 }

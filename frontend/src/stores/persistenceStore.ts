@@ -1,25 +1,24 @@
 /**
- * Persistence Store — Zustand state management for auto-save
+ * Persistence Store — Zustand state for auto-save and crash recovery
  *
- * Manages auto-save status, session lifecycle, and crash recovery state.
- * Integrates persistenceService and crashRecoveryService with the UI.
+ * Manages auto-save status, session lifecycle, and recovery state.
+ * Integrates with persistenceService and crashRecoveryService.
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
  */
+
 import { create } from 'zustand';
+import type { RecoveryCandidate, SceneSnapshot } from '../services/dbSchema';
 import {
+  closeSession as closeSessionInDB,
   saveSnapshot,
-  closeSession,
-  type SaveSnapshotInput,
 } from '../services/persistenceService';
 import {
+  acceptRecovery,
   detectCrash,
-  restoreSession,
   discardRecovery,
-  type RecoveryCandidate,
 } from '../services/crashRecoveryService';
-import type { SceneSnapshot } from '../services/dbSchema';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,25 +27,25 @@ import type { SceneSnapshot } from '../services/dbSchema';
 export type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 export interface PersistenceState {
-  // Auto-save state
+  // Session
   sessionId: string;
+  saveCount: number;
+
+  // Auto-save status
   autoSaveStatus: AutoSaveStatus;
   lastSavedAt: number | null;
-  saveCount: number;
-  error: string | null;
+  lastError: string | null;
 
-  // Recovery state
+  // Recovery
   recoveryCandidate: RecoveryCandidate | null;
   isRecoveryPromptVisible: boolean;
 
   // Actions
-  initSession: () => void;
-  triggerAutoSave: (input: Omit<SaveSnapshotInput, 'sessionId'>) => Promise<void>;
+  triggerAutoSave: () => Promise<void>;
   markSessionClosed: () => Promise<void>;
   checkForCrashRecovery: () => Promise<void>;
-  acceptRecovery: () => Promise<SceneSnapshot | null>;
-  rejectRecovery: () => Promise<void>;
-  dismissRecoveryPrompt: () => void;
+  acceptCrashRecovery: () => Promise<SceneSnapshot | null>;
+  discardCrashRecovery: () => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,61 +55,78 @@ export interface PersistenceState {
 export const usePersistenceStore = create<PersistenceState>((set, get) => ({
   // Initial state
   sessionId: crypto.randomUUID(),
+  saveCount: 0,
   autoSaveStatus: 'idle',
   lastSavedAt: null,
-  saveCount: 0,
-  error: null,
+  lastError: null,
   recoveryCandidate: null,
   isRecoveryPromptVisible: false,
 
   /**
-   * Initialize a new session with a fresh UUID.
-   */
-  initSession: () => {
-    set({ sessionId: crypto.randomUUID(), saveCount: 0, lastSavedAt: null });
-  },
-
-  /**
    * Trigger an auto-save of the current scene state.
-   * Updates status through idle → saving → saved/error.
+   * Reads bricks and camera from the scene/camera stores.
    */
-  triggerAutoSave: async (input) => {
-    const { sessionId } = get();
-    set({ autoSaveStatus: 'saving', error: null });
+  triggerAutoSave: async () => {
+    const { sessionId, saveCount } = get();
+    set({ autoSaveStatus: 'saving', lastError: null });
 
     try {
-      await saveSnapshot({ ...input, sessionId });
-      const { saveCount } = get();
+      // Import scene and camera stores dynamically to avoid circular deps
+      const { useSceneStore } = await import('./sceneStore');
+      const { useCameraStore } = await import('./cameraStore');
+
+      const sceneState = useSceneStore.getState();
+      const cameraState = useCameraStore.getState();
+
+      const bricks = (sceneState.bricks || []).map((brick: { id: string; type?: string; position: [number, number, number]; rotation?: [number, number, number, number]; color?: string }) => ({
+        id: brick.id,
+        type: brick.type || '2x4',
+        position: brick.position,
+        rotation: brick.rotation || [0, 0, 0, 1] as [number, number, number, number],
+        color: brick.color || '#FF0000',
+      }));
+
+      const camera = {
+        position: cameraState.position || [0, 10, 20] as [number, number, number],
+        target: cameraState.target || [0, 0, 0] as [number, number, number],
+        zoom: cameraState.zoom || 1,
+      };
+
+      const newSaveCount = saveCount + 1;
+
+      await saveSnapshot(sessionId, bricks, camera, {
+        name: 'Untitled Scene',
+        createdAt: Date.now(),
+        lastModifiedAt: Date.now(),
+      }, newSaveCount);
+
       set({
+        saveCount: newSaveCount,
         autoSaveStatus: 'saved',
         lastSavedAt: Date.now(),
-        saveCount: saveCount + 1,
       });
     } catch (error) {
       set({
         autoSaveStatus: 'error',
-        error: error instanceof Error ? error.message : 'Auto-save failed',
+        lastError: error instanceof Error ? error.message : 'Auto-save failed',
       });
     }
   },
 
   /**
-   * Mark the current session as closed (graceful tab close).
-   * Called from the beforeunload handler.
+   * Mark the current session as closed (graceful shutdown).
    */
   markSessionClosed: async () => {
     const { sessionId } = get();
     try {
-      await closeSession(sessionId);
+      await closeSessionInDB(sessionId);
     } catch {
-      // Best-effort during unload — don't throw
-      console.warn('Failed to mark session as closed');
+      // Best-effort during shutdown — don't throw
     }
   },
 
   /**
-   * Check for crash recovery candidates at boot time.
-   * If found, shows the recovery prompt.
+   * Check for crash recovery candidates on app boot.
    */
   checkForCrashRecovery: async () => {
     try {
@@ -122,49 +138,45 @@ export const usePersistenceStore = create<PersistenceState>((set, get) => ({
         });
       }
     } catch {
-      console.warn('Crash recovery check failed');
+      // Silently fail — don't block app startup
     }
   },
 
   /**
-   * Accept recovery — load the snapshot and return it.
-   * The caller is responsible for loading the data into the scene store.
+   * Accept the crash recovery candidate and restore the scene.
    */
-  acceptRecovery: async () => {
+  acceptCrashRecovery: async () => {
     const { recoveryCandidate } = get();
     if (!recoveryCandidate) return null;
 
     try {
-      const snapshot = await restoreSession(recoveryCandidate.snapshotId);
-      set({ isRecoveryPromptVisible: false, recoveryCandidate: null });
+      const snapshot = await acceptRecovery(recoveryCandidate);
+      set({
+        isRecoveryPromptVisible: false,
+        recoveryCandidate: null,
+      });
       return snapshot;
     } catch {
-      console.warn('Failed to restore session');
       set({ isRecoveryPromptVisible: false, recoveryCandidate: null });
       return null;
     }
   },
 
   /**
-   * Reject recovery — discard the orphaned session data.
+   * Discard the crash recovery candidate.
    */
-  rejectRecovery: async () => {
+  discardCrashRecovery: async () => {
     const { recoveryCandidate } = get();
     if (!recoveryCandidate) return;
 
     try {
-      await discardRecovery(recoveryCandidate.sessionId);
+      await discardRecovery(recoveryCandidate);
     } catch {
-      console.warn('Failed to discard recovery data');
+      // Best-effort
     }
-
-    set({ isRecoveryPromptVisible: false, recoveryCandidate: null });
-  },
-
-  /**
-   * Dismiss the recovery prompt without action.
-   */
-  dismissRecoveryPrompt: () => {
-    set({ isRecoveryPromptVisible: false });
+    set({
+      isRecoveryPromptVisible: false,
+      recoveryCandidate: null,
+    });
   },
 }));

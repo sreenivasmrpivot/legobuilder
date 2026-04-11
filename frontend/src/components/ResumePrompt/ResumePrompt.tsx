@@ -1,18 +1,14 @@
 /**
- * ResumePrompt — Accessible crash recovery modal
+ * ResumePrompt — Accessible modal for crash recovery
  *
- * Displays a dialog prompting the user to resume or discard a recovered
- * auto-save session after a browser crash or unexpected close.
- *
- * Accessibility:
- * - role="dialog" with aria-modal="true"
- * - aria-labelledby pointing to the dialog title
- * - Focus management for keyboard navigation
+ * Displays a dialog prompting the user to resume or discard a
+ * previously auto-saved session that was interrupted by a crash.
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
  * Spectra-Tests: T-UNIT-REL-001-05
  */
+
 import React from 'react';
 
 // ---------------------------------------------------------------------------
@@ -44,69 +40,41 @@ export function ResumePrompt({
       aria-modal="true"
       aria-labelledby="resume-prompt-title"
       data-testid="resume-prompt"
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        zIndex: 9999,
-      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
     >
-      <div
-        style={{
-          backgroundColor: '#ffffff',
-          borderRadius: '8px',
-          padding: '24px',
-          maxWidth: '400px',
-          width: '90%',
-          boxShadow: '0 4px 24px rgba(0, 0, 0, 0.2)',
-        }}
-      >
-        <h2 id="resume-prompt-title" style={{ margin: '0 0 12px 0' }}>
+      <div className="mx-4 w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+        <h2
+          id="resume-prompt-title"
+          className="mb-4 text-xl font-semibold text-gray-900"
+        >
           Resume your session?
         </h2>
-        <p style={{ margin: '0 0 20px 0', color: '#555' }}>
+
+        <p className="mb-6 text-gray-600">
           Your last session was auto-saved with{' '}
-          <span data-testid="resume-prompt-brick-count" style={{ fontWeight: 'bold' }}>
+          <span
+            data-testid="resume-prompt-brick-count"
+            className="font-bold text-blue-600"
+          >
             {brickCount}
           </span>{' '}
           brick{brickCount !== 1 ? 's' : ''} at {savedTime}.
         </p>
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-          <button
-            data-testid="discard-btn"
-            onClick={onDiscard}
-            style={{
-              padding: '8px 16px',
-              border: '1px solid #ccc',
-              borderRadius: '4px',
-              backgroundColor: '#f5f5f5',
-              cursor: 'pointer',
-              fontSize: '14px',
-            }}
-          >
-            Discard
-          </button>
+
+        <div className="flex gap-3">
           <button
             data-testid="resume-btn"
             onClick={onResume}
-            style={{
-              padding: '8px 16px',
-              border: 'none',
-              borderRadius: '4px',
-              backgroundColor: '#2563eb',
-              color: '#ffffff',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: 'bold',
-            }}
+            className="flex-1 rounded-md bg-blue-600 px-4 py-2 text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             Resume
+          </button>
+          <button
+            data-testid="discard-btn"
+            onClick={onDiscard}
+            className="flex-1 rounded-md border border-gray-300 bg-white px-4 py-2 text-gray-700 transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+          >
+            Discard
           </button>
         </div>
       </div>

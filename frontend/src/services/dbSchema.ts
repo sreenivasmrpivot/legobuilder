@@ -1,24 +1,28 @@
 /**
- * IndexedDB Schema Definition for LegoBuilder Auto-Save
+ * IndexedDB Schema for LegoBuilder Auto-Save
  *
- * Defines the database schema, types, and helper to open the database.
- * Uses the `idb` library for a Promise-based IndexedDB API.
+ * Database: legobuilder-v1
+ * Object Stores:
+ *   - scene-snapshots: Full scene state snapshots
+ *   - auto-save-meta: Session metadata for crash detection
  *
  * Spectra-Agent: frontend-coding
  * Spectra-FRs: NFR-REL-001
  */
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
 // ---------------------------------------------------------------------------
-// Schema Version
+// Constants
 // ---------------------------------------------------------------------------
 
-export const CURRENT_SCHEMA_VERSION = 1;
 export const DB_NAME = 'legobuilder-v1';
 export const DB_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 1;
+
+export const STORE_SCENE_SNAPSHOTS = 'scene-snapshots';
+export const STORE_AUTO_SAVE_META = 'auto-save-meta';
 
 // ---------------------------------------------------------------------------
-// Record Types (LLD Section 3.1)
+// Types
 // ---------------------------------------------------------------------------
 
 export interface BrickRecord {
@@ -60,31 +64,16 @@ export interface AutoSaveMeta {
   status: 'active' | 'closed';
 }
 
-// ---------------------------------------------------------------------------
-// IDB Schema (typed for `idb` library)
-// ---------------------------------------------------------------------------
-
-export interface LegoBuilderDB extends DBSchema {
-  'scene-snapshots': {
-    key: string;
-    value: SceneSnapshot;
-    indexes: {
-      sessionId: string;
-      timestamp: number;
-    };
-  };
-  'auto-save-meta': {
-    key: string;
-    value: AutoSaveMeta;
-    indexes: {
-      lastSavedAt: number;
-      status: string;
-    };
-  };
+export interface RecoveryCandidate {
+  sessionId: string;
+  snapshotId: string;
+  brickCount: number;
+  lastSavedAt: number;
+  appVersion: string;
 }
 
 // ---------------------------------------------------------------------------
-// Error Types (LLD Section 6)
+// Error Types
 // ---------------------------------------------------------------------------
 
 export enum PersistenceErrorCode {
@@ -107,58 +96,81 @@ export class PersistenceError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Database Open Helper
+// Database Initialization
 // ---------------------------------------------------------------------------
 
-let dbInstance: IDBPDatabase<LegoBuilderDB> | null = null;
+let dbInstance: IDBDatabase | null = null;
 
 /**
- * Opens (or returns cached) the LegoBuilder IndexedDB database.
- * Creates object stores and indexes on first open / upgrade.
+ * Open (or create) the legobuilder-v1 IndexedDB database.
+ * Creates object stores and indexes on first run or version upgrade.
  */
-export async function getDB(): Promise<IDBPDatabase<LegoBuilderDB>> {
+export async function openDatabase(): Promise<IDBDatabase> {
   if (dbInstance) return dbInstance;
 
-  try {
-    dbInstance = await openDB<LegoBuilderDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        // scene-snapshots store
-        if (!db.objectStoreNames.contains('scene-snapshots')) {
-          const snapStore = db.createObjectStore('scene-snapshots', {
-            keyPath: 'snapshotId',
-          });
-          snapStore.createIndex('sessionId', 'sessionId', { unique: false });
-          snapStore.createIndex('timestamp', 'timestamp', { unique: false });
-        }
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-        // auto-save-meta store
-        if (!db.objectStoreNames.contains('auto-save-meta')) {
-          const metaStore = db.createObjectStore('auto-save-meta', {
-            keyPath: 'sessionId',
-          });
-          metaStore.createIndex('lastSavedAt', 'lastSavedAt', { unique: false });
-          metaStore.createIndex('status', 'status', { unique: false });
-        }
-      },
-    });
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
 
-    return dbInstance;
-  } catch (error) {
-    throw new PersistenceError(
-      'Failed to open IndexedDB database',
-      PersistenceErrorCode.DB_OPEN_FAILED,
-      error,
-    );
-  }
+      if (!db.objectStoreNames.contains(STORE_SCENE_SNAPSHOTS)) {
+        const snapStore = db.createObjectStore(STORE_SCENE_SNAPSHOTS, {
+          keyPath: 'snapshotId',
+        });
+        snapStore.createIndex('sessionId', 'sessionId', { unique: false });
+        snapStore.createIndex('timestamp', 'timestamp', { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_AUTO_SAVE_META)) {
+        const metaStore = db.createObjectStore(STORE_AUTO_SAVE_META, {
+          keyPath: 'sessionId',
+        });
+        metaStore.createIndex('lastSavedAt', 'lastSavedAt', { unique: false });
+        metaStore.createIndex('status', 'status', { unique: false });
+      }
+    };
+
+    request.onsuccess = () => {
+      dbInstance = request.result;
+      resolve(dbInstance);
+    };
+
+    request.onerror = () => {
+      reject(
+        new PersistenceError(
+          'Failed to open IndexedDB',
+          PersistenceErrorCode.DB_OPEN_FAILED,
+          request.error,
+        ),
+      );
+    };
+  });
 }
 
 /**
- * Close and reset the cached DB instance.
+ * Close the database connection and reset the cached instance.
  * Useful for testing and cleanup.
  */
-export function closeDB(): void {
+export function closeDatabase(): void {
   if (dbInstance) {
     dbInstance.close();
     dbInstance = null;
   }
+}
+
+/**
+ * Validate that a snapshot object has the expected shape.
+ * Returns true if the snapshot is valid and compatible.
+ */
+export function isValidSnapshot(snapshot: unknown): snapshot is SceneSnapshot {
+  if (snapshot === null || typeof snapshot !== 'object') return false;
+  const s = snapshot as Record<string, unknown>;
+  return (
+    Array.isArray(s.bricks) &&
+    typeof s.schemaVersion === 'number' &&
+    s.schemaVersion <= CURRENT_SCHEMA_VERSION &&
+    typeof s.snapshotId === 'string' &&
+    typeof s.sessionId === 'string'
+  );
 }
