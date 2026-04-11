@@ -10,36 +10,32 @@
 
 ## Work Completed
 
-Frontend Coding Agent applied the B3 fix for Gate 9 review finding on PR #77 (NFR-REL-001 Auto-Save Crash Durability). The `idb` production dependency was missing from `frontend/package.json` despite being imported by `dbSchema.ts`.
+Frontend Coding Agent applied the B3 fix from Gate 9 review on PR #77 (NFR-REL-001 Auto-Save Crash Durability). This was a one-line fix — adding the missing `idb` production dependency to `frontend/package.json`.
 
 **Branch:** `feature/18-nfr-rel-001-frontend-tests`
 **PR:** #77
-**Fix Commit:** `d216a3f`
+**Fix Commit:** `005d069`
 
 ---
 
 ## Fix Applied
 
-### B3: `idb` package missing from `package.json` dependencies
-
 | ID | File | Fix |
 |----|------|-----|
-| B3 | `frontend/package.json` | Added `"idb": "^8.0.0"` to the `dependencies` section |
-
-This was the only remaining blocking issue. All prior findings (B1, B2, M1, M2, M3) were already verified as resolved in Gate 9.
+| B3 | `frontend/package.json` | Added `"idb": "^8.0.0"` to `dependencies`. Production code in `dbSchema.ts` imports from `'idb'` but the package was not declared, causing build failure. |
 
 ---
 
 ## All Findings Status
 
-| ID | Severity | Status | Iteration |
-|----|----------|--------|-----------|
-| B1 | 🔴 Blocking | ✅ Resolved | 2 |
-| B2 | 🔴 Blocking | ✅ Resolved | 2 |
-| B3 | 🔴 Blocking | ✅ Resolved | 4 |
-| M1 | 🟡 Medium | ✅ Resolved | 2 |
-| M2 | 🟡 Medium | ✅ Resolved | 2 |
-| M3 | 🟡 Medium | ✅ Resolved | 2 |
+| ID | Finding | Status |
+|----|---------|--------|
+| B1 | useAutoSave hardcoded empty data | ✅ Resolved (iteration 2) |
+| B2 | package.json unscoped changes | ✅ Resolved (iteration 2) |
+| B3 | idb missing from package.json | ✅ Resolved (iteration 4) |
+| M1 | Tests use inline stubs | ✅ Resolved (iteration 2) |
+| M2 | Silent catch in persistenceService | ✅ Resolved (iteration 2) |
+| M3 | Empty catches in persistenceStore | ✅ Resolved (iteration 2) |
 
 ---
 
@@ -47,7 +43,7 @@ This was the only remaining blocking issue. All prior findings (B1, B2, M1, M2, 
 
 | Artifact | Path | Description |
 |----------|------|-------------|
-| package.json (B3 fixed) | `frontend/package.json` | Added idb ^8.0.0 to production dependencies |
+| package.json (B3 fixed) | `frontend/package.json` | idb ^8.0.0 added to dependencies |
 | Handoff JSON | `docs/handoffs/012_frontend_coding_complete.json` | Machine-readable handoff |
 | Handoff Markdown | `docs/handoffs/012_frontend_coding_HANDOFF.md` | This file |
 
@@ -57,8 +53,8 @@ This was the only remaining blocking issue. All prior findings (B1, B2, M1, M2, 
 
 | Item | Reason | Severity |
 |------|--------|----------|
-| Gate 10 — Confirm B3 fix | Verify idb is now in dependencies section of frontend/package.json | high |
-| Build verification | Verify build succeeds with idb dependency declared | high |
+| Gate 10 re-review: B3 fix | Verify idb is now in dependencies section of package.json | high |
+| Build verification | Run npm install && npm run build to confirm build succeeds | high |
 
 ---
 
@@ -67,10 +63,9 @@ This was the only remaining blocking issue. All prior findings (B1, B2, M1, M2, 
 ### Recommended Actions
 
 1. Re-review PR #77 — verify `idb` is now in `dependencies` section of `frontend/package.json`
-2. Confirm no other changes were introduced (this was a one-line fix)
-3. All prior findings (B1, B2, M1, M2, M3) were already verified as resolved in Gate 9
-4. Run `npm install` to verify idb resolves correctly
-5. Run `vitest` to verify all unit tests still pass
+2. Confirm all 6 prior findings (B1, B2, B3, M1, M2, M3) are resolved
+3. This is a one-line fix — no other files changed
+4. Run `npm install && npm run build` to verify build succeeds
 
 ### Files to Read
 
