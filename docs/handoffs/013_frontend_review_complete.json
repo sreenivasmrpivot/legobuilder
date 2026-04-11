@@ -1,0 +1,72 @@
+{
+  "handoff_id": "013_frontend_review_complete",
+  "from_agent": "frontend-review",
+  "to_agent": "frontend-coding",
+  "timestamp": "2026-04-11T16:15:00Z",
+  "status": "changes_requested",
+  "app_id": "app-legobuilder-20260410",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "summary": "Gate 10 re-review of PR #77 (NFR-REL-001 Auto-Save Crash Durability). B3 fix NOT applied — idb is still missing from package.json dependencies despite fix commit 9ddac16 existing in branch history. The PR diff against main shows no idb in the dependencies section. The fix commit was likely overwritten by a subsequent docs commit (3b46c125) that pushed a version of package.json without idb. All 5 prior findings (B1, B2, M1, M2, M3) remain resolved. Additionally, package.json has several out-of-scope changes vs main baseline (script changes, removed devDeps, version changes) that should be addressed.",
+  "workflow_state": {
+    "current_phase": "frontend_review_recheck_2_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design", "frontend_test", "frontend_coding", "frontend_review", "frontend_coding_fix", "frontend_review_recheck", "frontend_coding_fix_2", "frontend_review_recheck_2"],
+    "remaining_phases": ["frontend_coding_fix_3", "frontend_review_recheck_3", "release"]
+  },
+  "review_verdict": "CHANGES_REQUESTED",
+  "pr_number": 77,
+  "branch": "feature/18-nfr-rel-001-frontend-tests",
+  "prior_findings_verification": {
+    "B1": { "status": "resolved", "verification": "useAutoSave.ts reads actual scene state from sceneStore via useSceneStore.getState()" },
+    "B2": { "status": "resolved", "verification": "package.json baseline mostly preserved — some out-of-scope changes remain (scripts, removed devDeps)" },
+    "M1": { "status": "resolved", "verification": "ResumePrompt.test.tsx and useAutoSave.test.ts import real production modules" },
+    "M2": { "status": "resolved", "verification": "console.warn added to persistenceService.ts catch block" },
+    "M3": { "status": "resolved", "verification": "console.warn added to all 4 catch blocks in persistenceStore.ts" }
+  },
+  "current_findings": {
+    "blocking": [
+      {
+        "id": "B3",
+        "severity": "high",
+        "file": "frontend/package.json",
+        "title": "idb package STILL missing from dependencies — fix commit was overwritten",
+        "description": "Fix commit 9ddac16 exists in branch history but the PR diff against main does NOT show idb in the dependencies section. The subsequent docs commit (3b46c125) appears to have pushed a version of package.json without the idb addition. The current branch HEAD file does not contain idb in dependencies.",
+        "impact": "Build will fail with 'Cannot find module idb'. All 6 production modules depending on dbSchema.ts will be broken.",
+        "fix": "Push a new commit that adds '\"idb\": \"^8.0.0\"' to the dependencies section of frontend/package.json. Verify the file content at branch HEAD after pushing."
+      }
+    ],
+    "medium": [
+      {
+        "id": "B2-residual",
+        "severity": "medium",
+        "file": "frontend/package.json",
+        "title": "Out-of-scope changes remain in package.json vs main baseline",
+        "description": "Several changes beyond NFR-REL-001 scope: lint/format scripts changed, @eslint/js removed, typescript-eslint removed, three-mesh-bvh bumped 0.7→0.8, typescript caret→tilde, vitest/coverage-v8 downgraded 2.1→2.0.",
+        "fix": "Revert these changes to match main branch baseline. Only additions should be idb (dep) and fake-indexeddb + globals (devDeps)."
+      }
+    ],
+    "low": [
+      { "id": "L1", "file": "frontend/src/services/dbSchema.ts", "title": "No closeDB() for HMR cleanup" },
+      { "id": "L2", "file": "frontend/src/hooks/useAutoSave.ts", "title": "markSessionClosed async in sync beforeunload" },
+      { "id": "L3", "file": "frontend/src/components/ResumePrompt/ResumePrompt.tsx", "title": "No focus trap in modal" },
+      { "id": "L4", "file": "frontend/src/services/persistenceService.ts", "title": "purgeSession() uses raw IDBKeyRange.only()" },
+      { "id": "L5", "file": "frontend/src/services/persistenceService.ts", "title": "existingMeta read outside atomic transaction" }
+    ]
+  },
+  "human_review_required": [
+    { "item": "Gate 10 — B3 fix must be re-applied: idb missing from package.json dependencies", "severity": "high" },
+    { "item": "Verify package.json matches main baseline after fix", "severity": "medium" }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Fix B3: The previous fix commit was overwritten. Push a new commit adding '\"idb\": \"^8.0.0\"' to dependencies in frontend/package.json",
+      "Verify the file content at branch HEAD after pushing — do not rely on commit history alone",
+      "Consider also reverting the out-of-scope package.json changes (B2-residual)"
+    ],
+    "files_to_modify": ["frontend/package.json"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-012"],
+    "forward_pass_score": 0.95
+  }
+}
