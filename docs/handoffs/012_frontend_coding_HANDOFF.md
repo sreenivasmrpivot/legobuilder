@@ -10,32 +10,31 @@
 
 ## Work Completed
 
-Frontend Coding Agent applied the B3 fix from Gate 9 review on PR #77 (NFR-REL-001 Auto-Save Crash Durability). This was a one-line fix — adding the missing `idb` production dependency to `frontend/package.json`.
+Frontend Coding Agent fixed the single remaining blocking issue (B3) from Gate 9 review on PR #77 (NFR-REL-001 Auto-Save Crash Durability). Added `"idb": "^8.0.0"` to the `dependencies` section of `frontend/package.json`.
 
 **Branch:** `feature/18-nfr-rel-001-frontend-tests`
 **PR:** #77
-**Fix Commit:** `005d069`
+**Fix Commit:** `3af3ec7`
 
 ---
 
 ## Fix Applied
 
+### B3: idb package missing from package.json dependencies
+
 | ID | File | Fix |
 |----|------|-----|
-| B3 | `frontend/package.json` | Added `"idb": "^8.0.0"` to `dependencies`. Production code in `dbSchema.ts` imports from `'idb'` but the package was not declared, causing build failure. |
+| B3 | `frontend/package.json` | Added `"idb": "^8.0.0"` to `dependencies`. Production code in `dbSchema.ts` imports `{ openDB, type IDBPDatabase, type DBSchema } from 'idb'` — without this declaration, `npm install` would not install the package and the build would fail with `Cannot find module 'idb'`. |
 
----
-
-## All Findings Status
+### Prior Findings — All Verified Resolved in Gate 9
 
 | ID | Finding | Status |
 |----|---------|--------|
-| B1 | useAutoSave hardcoded empty data | ✅ Resolved (iteration 2) |
-| B2 | package.json unscoped changes | ✅ Resolved (iteration 2) |
-| B3 | idb missing from package.json | ✅ Resolved (iteration 4) |
-| M1 | Tests use inline stubs | ✅ Resolved (iteration 2) |
-| M2 | Silent catch in persistenceService | ✅ Resolved (iteration 2) |
-| M3 | Empty catches in persistenceStore | ✅ Resolved (iteration 2) |
+| B1 | useAutoSave hardcoded empty data | ✅ Resolved |
+| B2 | package.json unscoped changes | ✅ Resolved |
+| M1 | Tests use inline stubs | ✅ Resolved |
+| M2 | Silent catch in persistenceService.ts | ✅ Resolved |
+| M3 | Empty catches in persistenceStore.ts | ✅ Resolved |
 
 ---
 
@@ -43,7 +42,7 @@ Frontend Coding Agent applied the B3 fix from Gate 9 review on PR #77 (NFR-REL-0
 
 | Artifact | Path | Description |
 |----------|------|-------------|
-| package.json (B3 fixed) | `frontend/package.json` | idb ^8.0.0 added to dependencies |
+| package.json (B3 fixed) | `frontend/package.json` | idb added to production dependencies |
 | Handoff JSON | `docs/handoffs/012_frontend_coding_complete.json` | Machine-readable handoff |
 | Handoff Markdown | `docs/handoffs/012_frontend_coding_HANDOFF.md` | This file |
 
@@ -53,8 +52,8 @@ Frontend Coding Agent applied the B3 fix from Gate 9 review on PR #77 (NFR-REL-0
 
 | Item | Reason | Severity |
 |------|--------|----------|
-| Gate 10 re-review: B3 fix | Verify idb is now in dependencies section of package.json | high |
-| Build verification | Run npm install && npm run build to confirm build succeeds | high |
+| Gate 10 — Confirm B3 fix | Verify idb is in package.json dependencies | high |
+| Build verification | Confirm build succeeds with all deps declared | high |
 
 ---
 
@@ -62,14 +61,15 @@ Frontend Coding Agent applied the B3 fix from Gate 9 review on PR #77 (NFR-REL-0
 
 ### Recommended Actions
 
-1. Re-review PR #77 — verify `idb` is now in `dependencies` section of `frontend/package.json`
-2. Confirm all 6 prior findings (B1, B2, B3, M1, M2, M3) are resolved
-3. This is a one-line fix — no other files changed
-4. Run `npm install && npm run build` to verify build succeeds
+1. Re-review PR #77 focusing on the B3 fix
+2. Verify `frontend/package.json` has `"idb": "^8.0.0"` in `dependencies`
+3. Confirm all prior findings (B1, B2, M1, M2, M3) remain resolved
+4. Verify the build would succeed with all dependencies declared
 
 ### Files to Read
 
 - `frontend/package.json`
+- `frontend/src/services/dbSchema.ts`
 
 ---
 
@@ -81,4 +81,4 @@ Frontend Coding Agent applied the B3 fix from Gate 9 review on PR #77 (NFR-REL-0
 
 ---
 
-*Created by Spectra Framework — frontend-coding agent (iteration 4)*
+*Created by Spectra Framework — frontend-coding agent (iteration 5)*
