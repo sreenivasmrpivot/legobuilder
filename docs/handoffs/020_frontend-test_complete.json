@@ -2,121 +2,112 @@
   "handoff_id": "020_frontend-test_complete",
   "from_agent": "frontend-test",
   "to_agent": "frontend-coding",
-  "timestamp": "2026-04-11T05:55:00Z",
+  "timestamp": "2026-04-11T05:58:29Z",
   "status": "complete",
   "event": {
-    "event_id": "evt-nfr-rel-001-frontend-test-complete",
+    "event_id": "b1775887145599-0",
     "event_type": "agent.handoff.completed",
-    "correlation_id": "wf-app-legobuilder-20260410",
-    "causation_id": "evt-006-design-complete"
+    "correlation_id": "app-legobuilder-20260410",
+    "causation_id": "006_design_complete"
   },
   "state_ref": {
-    "request_id": "31c4d9ce-ebf8-4bd8-b4b6-a6de18b48c23",
+    "request_id": "4340f4da-320e-49d5-8745-a7a06a7afc18",
     "workflow_state_uri": "docs/handoffs/020_frontend-test_complete.json"
   },
   "project": {
     "name": "legobuilder",
     "type": "greenfield",
-    "app_id": "app-legobuilder-20260410",
-    "repo": "sreenivasmrpivot/legobuilder"
+    "path": "sreenivasmrpivot/legobuilder"
   },
   "artifacts": [
     {
-      "name": "crashRecovery-e2e-spec",
+      "name": "crashRecovery.spec.ts",
       "path": "frontend/tests/e2e/crashRecovery.spec.ts",
       "type": "test",
-      "description": "Playwright E2E tests: T-BE-REL-001-01 (crash + recovery) and T-BE-REL-001-02 (graceful close)"
+      "description": "Playwright E2E: T-BE-REL-001-01 (crash + recovery cycle) and T-BE-REL-001-02 (graceful close, no prompt)"
     },
     {
-      "name": "persistenceService-unit-tests",
-      "path": "frontend/src/services/persistenceService.test.ts",
+      "name": "persistenceService.test.ts",
+      "path": "frontend/tests/unit/persistenceService.test.ts",
       "type": "test",
-      "description": "Vitest unit tests: T-UNIT-REL-001-01 (atomic write), T-UNIT-REL-001-04 (quota error), T-UNIT-REL-001-07 (snapshot pruning)"
+      "description": "Vitest unit: T-UNIT-REL-001-01 (saveSnapshot atomicity), T-UNIT-REL-001-04 (quota exceeded), T-UNIT-REL-001-07 (snapshot pruning max 10)"
     },
     {
-      "name": "crashRecoveryService-unit-tests",
+      "name": "crashRecoveryService.test.ts",
       "path": "frontend/tests/unit/crashRecoveryService.test.ts",
       "type": "test",
-      "description": "Vitest unit tests: T-UNIT-REL-001-02 (detectOrphanedSession active), T-UNIT-REL-001-03 (detectOrphanedSession closed)"
+      "description": "Vitest unit: T-UNIT-REL-001-02 (detectOrphanedSession active), T-UNIT-REL-001-03 (detectOrphanedSession closed/missing)"
     },
     {
-      "name": "useAutoSave-unit-tests",
+      "name": "useAutoSave.test.ts",
       "path": "frontend/tests/unit/useAutoSave.test.ts",
       "type": "test",
-      "description": "Vitest unit tests: T-UNIT-REL-001-05 (30s debounce), T-UNIT-REL-001-06 (concurrent write guard)"
+      "description": "Vitest unit: T-UNIT-REL-001-05 (30s debounce fires save), T-UNIT-REL-001-06 (concurrent write guard)"
     },
     {
-      "name": "ResumePrompt-component-tests",
+      "name": "persistenceStore.test.ts",
+      "path": "frontend/tests/unit/persistenceStore.test.ts",
+      "type": "test",
+      "description": "Vitest unit: persistenceStore Zustand slice interface contract"
+    },
+    {
+      "name": "ResumePrompt.test.tsx",
       "path": "frontend/tests/component/ResumePrompt.test.tsx",
       "type": "test",
-      "description": "Vitest component test: T-UNIT-REL-001-08 (ARIA attributes, dialog role, button labels, interaction)"
+      "description": "Vitest component: T-UNIT-REL-001-08 (ARIA attributes, dialog role, button labels, interaction)"
     },
     {
-      "name": "test-pr",
+      "name": "PR #71",
       "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/71",
       "type": "pull_request",
-      "description": "Draft PR #71 — Gate 7 Frontend Test Review for NFR-REL-001"
+      "description": "Draft PR: [area:frontend] NFR-REL-001 Auto-Save Crash Durability — Frontend Tests (#35)"
     }
   ],
   "summary": {
-    "work_completed": "Authored all 10 test cases for NFR-REL-001 Auto-Save Crash Durability: 2 Playwright E2E tests (T-BE-REL-001-01/02) and 8 Vitest unit/component tests (T-UNIT-REL-001-01 through 08). Tests are contract-first: they define the acceptance criteria the coding agent must satisfy. PR #71 is open as a Draft on branch feature/30-nfr-rel-001-tests awaiting Gate 7 human review.",
+    "work_completed": "Authored all 10 contract-first test cases for NFR-REL-001 (Auto-Save Crash Durability): 2 Playwright E2E tests and 8 Vitest unit/component tests. Tests are red (failing) by design — they define the interface the coding agent must implement. Draft PR #71 is open on branch feature/30-nfr-rel-001-tests awaiting Gate 7 human review.",
     "key_findings": [
-      "All 10 LLD test cases are covered across 5 test files",
-      "fake-indexeddb/auto used for all IndexedDB unit tests (jsdom limitation)",
+      "All 10 LLD test case IDs are covered: T-BE-REL-001-01/02 (E2E) and T-UNIT-REL-001-01 through T-UNIT-REL-001-08 (unit/component)",
+      "fake-indexeddb/auto used for unit tests (jsdom has no IndexedDB support)",
       "vi.useFakeTimers() used for deterministic 30s debounce testing",
-      "Concurrent write guard tested via unresolved Promise pattern",
-      "ResumePrompt ARIA contract validated: role=dialog, aria-modal, aria-labelledby, aria-describedby",
-      "E2E crash simulation uses browser.close({ runBeforeUnload: false }) per LLD"
+      "Playwright browser.close({ runBeforeUnload: false }) correctly simulates crash",
+      "ResumePrompt ARIA contract validated: role=dialog, aria-modal, aria-labelledby, aria-describedby"
     ],
     "metrics": {
-      "test_files": 5,
-      "test_cases_total": 10,
+      "test_files": 6,
+      "test_cases": 10,
       "e2e_tests": 2,
       "unit_tests": 7,
-      "component_tests": 1,
-      "fr_ids": ["NFR-REL-001", "FR-18"]
+      "component_tests": 1
     }
   },
   "human_review_required": [
     {
-      "item": "Gate 7: PR #71 requires human design review before merge",
-      "reason": "Test contracts define the coding agent's acceptance criteria — human must verify test coverage is complete and correct before implementation begins",
+      "item": "Gate 7: Frontend Test Review — PR #71",
+      "reason": "All 10 contract-first tests must be reviewed before coding agent implements production code against them",
       "severity": "high"
     },
     {
-      "item": "LLD PR #48 (design-agent) is still a Draft — must be merged to main before coding agent begins",
-      "reason": "The coding agent reads the approved LLD from main; PR #48 must be approved and merged at Gate 6a first",
+      "item": "Gate 6a: Design Review — PR #48 (feature/35-nfr-rel-001-design)",
+      "reason": "LLD must be approved and merged to main before coding agent reads it as the authoritative spec",
       "severity": "high"
-    },
-    {
-      "item": "Verify fake-indexeddb is in package.json devDependencies",
-      "reason": "Tests import fake-indexeddb/auto; if not present, CI will fail with module not found",
-      "severity": "medium"
     }
   ],
   "next_agent_context": {
     "recommended_actions": [
-      "Wait for Gate 7 approval of PR #71 (this PR) before starting implementation",
-      "Wait for Gate 6a approval and merge of PR #48 (LLD) before starting implementation",
-      "Read the approved LLD from main: docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
-      "Implement src/services/persistenceService.ts to pass T-UNIT-REL-001-01/04/07",
-      "Implement src/services/crashRecoveryService.ts to pass T-UNIT-REL-001-02/03",
-      "Implement src/hooks/useAutoSave.ts to pass T-UNIT-REL-001-05/06",
-      "Implement src/components/ResumePrompt.tsx to pass T-UNIT-REL-001-08",
-      "Implement the full crash recovery flow to pass E2E tests T-BE-REL-001-01/02",
-      "Reuse branch feature/30-nfr-rel-001-tests (do not create a new branch)"
+      "Review Draft PR #71 at https://github.com/sreenivasmrpivot/legobuilder/pull/71 — Gate 7 (Frontend Test Review)",
+      "Verify all 10 test IDs from LLD Section 10 are present",
+      "Approve and merge PR #71 to main to unblock the frontend coding agent",
+      "Implement: persistenceService.ts, crashRecoveryService.ts, useAutoSave.ts, persistenceStore.ts, ResumePrompt.tsx against the red test suite on branch feature/30-nfr-rel-001-tests",
+      "Note: Design PR #48 must also be merged before coding begins"
     ],
     "files_to_read": [
       "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
       "frontend/tests/e2e/crashRecovery.spec.ts",
-      "frontend/src/services/persistenceService.test.ts",
+      "frontend/tests/unit/persistenceService.test.ts",
       "frontend/tests/unit/crashRecoveryService.test.ts",
       "frontend/tests/unit/useAutoSave.test.ts",
-      "frontend/tests/component/ResumePrompt.test.tsx",
-      "frontend/src/services/persistenceService.ts",
-      "frontend/src/hooks/useAutoSave.ts",
-      "frontend/src/stores/sceneStore.ts",
-      "frontend/package.json"
+      "frontend/tests/unit/persistenceStore.test.ts",
+      "frontend/tests/component/ResumePrompt.test.tsx"
     ]
   },
   "workflow_state": {
@@ -126,10 +117,15 @@
     "remaining_phases": ["frontend-coding", "review", "release"]
   },
   "alignment": {
-    "tcu_ids": ["TCU-031"],
-    "forward_pass_score": 0.94,
+    "tcu_ids": ["TCU-NFR-REL-001-TEST"],
+    "forward_pass_score": 0.95,
     "backward_pass_score": null,
     "human_score": null,
     "convergence_score": null
-  }
+  },
+  "branch": "feature/30-nfr-rel-001-tests",
+  "pr_number": 71,
+  "issue_number": 35,
+  "fr_id": "NFR-REL-001",
+  "app_id": "app-legobuilder-20260410"
 }
