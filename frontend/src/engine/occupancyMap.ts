@@ -1,54 +1,73 @@
-import type { Brick, BrickType } from '@/types/brick';
-import { BRICK_CATALOG } from './brickCatalog';
+/**
+ * occupancyMap.ts — Grid occupancy tracking for brick placement
+ *
+ * FR-ID: FR-UI-003 — Ghost Brick Placement Preview
+ * Test IDs: T-FE-UI-003-01, T-FE-UI-003-02
+ *
+ * Tracks which grid cells are occupied by placed bricks. Used by the
+ * ghost brick system to determine placement validity.
+ *
+ * Spectra-Agent: frontend-coding
+ * Spectra-FRs: FR-UI-003
+ * Spectra-Tests: T-FE-UI-003-01, T-FE-UI-003-02
+ */
 
-type GridKey = `${number},${number},${number}`;
+/** Position in 3D grid space */
+export interface GridPosition {
+  x: number;
+  y: number;
+  z: number;
+}
 
-export class OccupancyMap {
-  private grid: Map<GridKey, string> = new Map();
+/**
+ * Generates a unique string key for a grid position.
+ * Used as the key in the occupancy map Set.
+ */
+function positionKey(position: GridPosition): string {
+  return `${position.x},${position.y},${position.z}`;
+}
 
-  canPlace(type: BrickType, position: [number, number, number]): boolean {
-    const cells = this.getCells(type, position);
-    return cells.every((cell) => !this.grid.has(cell));
-  }
+/** Set of occupied cell keys */
+const occupiedCells = new Set<string>();
 
-  occupy(brick: Brick): void {
-    const cells = this.getCells(brick.type, brick.position);
-    cells.forEach((cell) => this.grid.set(cell, brick.id));
-  }
+/**
+ * Checks whether a grid cell at the given position is occupied.
+ *
+ * @param position - The grid position to check
+ * @returns true if the cell is occupied, false if free
+ */
+export function isCellOccupied(position: GridPosition): boolean {
+  return occupiedCells.has(positionKey(position));
+}
 
-  release(brick: Brick): void {
-    const cells = this.getCells(brick.type, brick.position);
-    cells.forEach((cell) => this.grid.delete(cell));
-  }
+/**
+ * Marks a grid cell as occupied.
+ *
+ * @param position - The grid position to mark as occupied
+ */
+export function occupyCell(position: GridPosition): void {
+  occupiedCells.add(positionKey(position));
+}
 
-  getBrickAt(position: [number, number, number]): string | undefined {
-    const key: GridKey = `${position[0]},${position[1]},${position[2]}`;
-    return this.grid.get(key);
-  }
+/**
+ * Marks a grid cell as free (unoccupied).
+ *
+ * @param position - The grid position to free
+ */
+export function freeCell(position: GridPosition): void {
+  occupiedCells.delete(positionKey(position));
+}
 
-  clear(): void {
-    this.grid.clear();
-  }
+/**
+ * Clears all occupied cells. Useful for scene reset.
+ */
+export function clearOccupancy(): void {
+  occupiedCells.clear();
+}
 
-  get size(): number {
-    return this.grid.size;
-  }
-
-  private getCells(type: BrickType, position: [number, number, number]): GridKey[] {
-    const def = BRICK_CATALOG[type];
-    if (!def) return [];
-
-    const cells: GridKey[] = [];
-    const [x, y, z] = position;
-
-    for (let dx = 0; dx < def.width; dx++) {
-      for (let dz = 0; dz < def.depth; dz++) {
-        for (let dy = 0; dy < def.height; dy++) {
-          cells.push(`${x + dx},${y + dy},${z + dz}`);
-        }
-      }
-    }
-
-    return cells;
-  }
+/**
+ * Returns the count of occupied cells.
+ */
+export function getOccupiedCount(): number {
+  return occupiedCells.size;
 }
