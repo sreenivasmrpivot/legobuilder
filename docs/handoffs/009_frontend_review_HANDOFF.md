@@ -1,4 +1,4 @@
-# Handoff: Frontend Review → Frontend Coding
+# Handoff: Frontend Review → Frontend Coding (Revision)
 
 **Handoff ID:** 009_frontend_review_complete
 **Date:** 2026-04-11
@@ -8,70 +8,94 @@
 
 ---
 
-## Review Verdict: ⛔ REQUEST CHANGES
+## Review Verdict: ❌ REQUEST CHANGES
 
 Frontend Review Agent (Gate 8) reviewed PR #77 for **NFR-REL-001 — Auto-Save Crash Durability**.
 
-**3 blocking issues** must be resolved before approval.
+**2 blocking issues** must be resolved before approval. **3 medium issues** should be addressed.
+
+**Branch:** `feature/18-nfr-rel-001-frontend-tests`
+**PR:** #77
 
 ---
 
-## Blocking Issues
+## 🔴 Blocking Issues
 
-### B1. `useAutoSave` passes hardcoded empty data (Critical)
-- **File:** `frontend/src/hooks/useAutoSave.ts:39-44`
-- The interval callback passes `bricks: []`, hardcoded camera state, and placeholder metadata
-- Auto-save will always persist an empty scene regardless of user state
-- E2E test T-BE-REL-001-01 (50 bricks survive crash) will fail
-- **Fix:** Read actual scene state from `sceneStore` using `useSceneStore.getState()`
+### B1. `useAutoSave.ts` passes hardcoded empty data — auto-save is a no-op
 
-### B2. `package.json` has out-of-scope breaking changes (High)
-- **File:** `frontend/package.json`
-- Removed: `immer`, `three-mesh-bvh`, `@vitest/coverage-v8`
-- Major bumps: `zustand` 4→5, `vite` 5→6
+**File:** `frontend/src/hooks/useAutoSave.ts`, lines 42-46
+
+The interval callback passes `bricks: []`, hardcoded camera state, and placeholder metadata. No actual user work is ever saved. E2E tests T-BE-REL-001-01 and T-BE-REL-001-02 will fail.
+
+**Fix:** Read actual bricks/camera/metadata from `sceneStore` inside the hook, or accept them as parameters.
+
+### B2. `package.json` has out-of-scope breaking changes
+
+**File:** `frontend/package.json`
+
+- Removed `immer`, `three-mesh-bvh`, `@vitest/coverage-v8`
+- Bumped `zustand` 4→5 and `vite` 5→6 (major versions)
 - Removed scripts: `lint:fix`, `format`, `format:check`, `type-check`, `test:e2e:ui`
-- Package name changed: `legobuilder` → `legobuilder-frontend`
-- **Fix:** Revert to base `package.json`, only add `idb` and `fake-indexeddb`
+- Renamed package from `legobuilder` to `legobuilder-frontend`
 
-### B3. All test files use inline stubs (High)
-- **Files:** All 4 test files
-- Every test defines its own inline implementation instead of importing production code
-- Tests provide false confidence — bugs in production code would not be caught
-- **Fix:** Update imports to use real production modules; use `resetDBPromise()` for isolation
+**Fix:** Revert to main branch version, only add `idb` and `fake-indexeddb`.
 
 ---
 
-## Medium Concerns (non-blocking)
+## 🟡 Medium Issues
 
-| ID | Concern | File |
-|----|---------|------|
-| M1 | `markSessionClosed()` async but fire-and-forget in beforeunload | `useAutoSave.ts:33` |
-| M2 | `existingMeta` read outside atomic transaction (TOCTOU) | `persistenceService.ts:80-82` |
-| M3 | `purgeSession()` uses raw `IDBKeyRange` instead of `idb` wrapper | `persistenceService.ts:155-161` |
-| M4 | Missing focus trap and Escape key in ResumePrompt | `ResumePrompt.tsx:42` |
-| M5 | `resetDBPromise()` doesn't close existing connection | `dbSchema.ts:130-132` |
+### M1. Tests use inline stubs instead of importing production code
+
+All 4 test files define their own implementations rather than importing the real production modules. Tests provide zero coverage of actual production code.
+
+### M2. Empty catch block silently swallows errors
+
+`persistenceService.ts:80-82` — Add `console.warn` for debuggability.
+
+### M3. ResumePrompt lacks focus trap and Escape key handling
+
+Missing WCAG 2.1 AA keyboard accessibility. Track as follow-up issue.
 
 ---
 
-## Strengths Confirmed
+## ✅ What's Good
 
-- ✅ `idb` library usage per LLD Section 13
-- ✅ Atomic dual-store transaction in `saveSnapshot()`
-- ✅ Validation-first crash recovery with `isValidSnapshot()`
-- ✅ Quota exceeded purge-and-retry with `PersistenceError`
-- ✅ All `data-testid` attributes match E2E selectors
-- ✅ Accessible modal (role=dialog, aria-modal, aria-labelledby)
-- ✅ Clean module separation and JSDoc documentation
-- ✅ Overlap guard with `isSavingRef` in `useAutoSave`
+- `idb` library used correctly per LLD Section 13
+- Atomic dual-store transactions in `saveSnapshot()`
+- Validation-first crash recovery with schema version check
+- `PersistenceError` class with typed error codes
+- All `data-testid` attributes match E2E selectors
+- Accessible modal (`role=dialog`, `aria-modal`, `aria-labelledby`)
+- `beforeunload` listener with cleanup on unmount
+- Overlap guard (ref-based) prevents concurrent saves
+- Clean module separation and JSDoc documentation
+
+---
+
+## Test ID Coverage
+
+| Test ID | Status |
+|---------|--------|
+| T-BE-REL-001-01 | ⚠️ Will fail (B1) |
+| T-BE-REL-001-02 | ⚠️ Will fail (B1) |
+| T-UNIT-REL-001-01 | ✅ Contract met |
+| T-UNIT-REL-001-02 | ✅ Contract met |
+| T-UNIT-REL-001-03 | ✅ Contract met |
+| T-UNIT-REL-001-04 | ✅ Contract met |
+| T-UNIT-REL-001-05 | ✅ Contract met |
+| T-UNIT-REL-001-06 | ✅ Contract met |
+| T-UNIT-REL-001-07 | ✅ Contract met |
+| T-UNIT-REL-001-08 | ✅ Contract met |
 
 ---
 
 ## Required Actions
 
-1. Fix `useAutoSave.ts` — read actual scene state from `sceneStore`
-2. Revert `package.json` — only add `idb`, `fake-indexeddb`, `globals`
-3. Update all 4 test files to import real production modules
-4. Re-run all tests after fixes
+1. **[B1] Fix `useAutoSave.ts`** — Read actual scene state from `sceneStore`
+2. **[B2] Revert `package.json`** — Only add `idb` and `fake-indexeddb`
+3. **[M1] Update test imports** — Replace inline stubs with real production module imports
+4. **[M2] Add warning log** — Replace empty catch in `persistenceService.ts:80-82`
+5. **[M3] Create follow-up issue** — Focus trap + Escape key for ResumePrompt
 
 ---
 
@@ -79,7 +103,7 @@ Frontend Review Agent (Gate 8) reviewed PR #77 for **NFR-REL-001 — Auto-Save C
 
 - **Current phase:** frontend_review_changes_requested
 - **Completed:** design, frontend_test, frontend_coding, frontend_review
-- **Remaining:** frontend_coding_fix, frontend_review_re, release
+- **Remaining:** frontend_coding_revision, frontend_review_re-review, release
 
 ---
 
