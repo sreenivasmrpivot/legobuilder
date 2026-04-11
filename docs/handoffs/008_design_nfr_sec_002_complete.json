@@ -1,0 +1,61 @@
+{
+  "handoff_id": "008_design_nfr_sec_002_complete",
+  "from_agent": "design-agent",
+  "to_agent": "gate-6a-design-review",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "app_id": "app-legobuilder-20260410",
+  "timestamp": "2026-04-11T01:47:00Z",
+  "status": "complete",
+  "summary": "Design agent completed Low-Level Design for NFR-SEC-002 (Issue #31) — Enforce Content Security Policy headers; eliminate inline scripts and eval(). LLD covers: production CSP header value (default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests), nginx.conf security headers block (CSP + X-Content-Type-Options + X-Frame-Options + Referrer-Policy + Permissions-Policy), ESLint rule additions (no-eval, no-new-func, no-script-url, no-implied-eval), dev-only Vite cspNoncePlugin interface (apply: 'serve', transformIndexHtml nonce injection), CspNonce module (getCspNonce + applyNonce, dev-only), 4 sequence diagrams (production request flow, CSP violation detection E2E, build-time ESLint enforcement, dev server nonce flow), threat model (8 threats + mitigations), 5 test case mappings (T-SEC-002-01 through T-SEC-002-05), 5 open questions, and implementation checklist. Draft PR #50 is open on branch feature/31-nfr-sec-002-design awaiting Gate 6a human design review. Area determined as frontend (pure client-side SPA).",
+  "workflow_state": {
+    "current_phase": "design_complete",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["research", "architecture", "planning", "design"],
+    "remaining_phases": ["test", "implementation", "review", "release"]
+  },
+  "artifacts": [
+    {
+      "name": "Low-Level Design: NFR-SEC-002",
+      "path": "docs/features/NFR-SEC-002/LOW_LEVEL_DESIGN.md",
+      "type": "design-doc",
+      "description": "Full LLD for CSP enforcement: production CSP directive set, nginx security headers block, ESLint no-eval rules, dev-only Vite nonce plugin, CspNonce module interface, 4 sequence diagrams, threat model (8 threats), 5 test case mappings (T-SEC-002-01 through T-SEC-002-05), 5 open questions, implementation checklist"
+    },
+    {
+      "name": "Design PR #50",
+      "path": "https://github.com/sreenivasmrpivot/legobuilder/pull/50",
+      "type": "pull-request",
+      "description": "Draft PR on branch feature/31-nfr-sec-002-design — awaiting Gate 6a design review approval"
+    }
+  ],
+  "human_review_required": [
+    "[HIGH] Gate 6a Design Review — PR #50 must be reviewed and approved by a human before implementation begins. The LLD defines the CSP directive set, nginx header block, and ESLint rules that the frontend coding agent must implement.",
+    "[HIGH] Verify Open Question #3: Does Three.js use eval() internally? If yes, unsafe-eval must be added to script-src, significantly weakening the CSP.",
+    "[HIGH] Verify Open Question #4: Does the Vite production build inject any inline scripts into index.html? If yes, a nonce or hash must be added to script-src.",
+    "[MEDIUM] Decide on Open Question #1: Can style-src 'unsafe-inline' be eliminated? Requires auditing all Tailwind + Three.js style mutations.",
+    "[LOW] Decide on Open Question #2: Should a CSP report-to endpoint be added for violation observability?",
+    "[LOW] Confirm Open Question #5: Is upgrade-insecure-requests safe for local Docker HTTP development?"
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Review Draft PR #50 at https://github.com/sreenivasmrpivot/legobuilder/pull/50 — this is Gate 6a (Design Review)",
+      "Verify LLD at docs/features/NFR-SEC-002/LOW_LEVEL_DESIGN.md is consistent with docs/TECHNICAL_ARCHITECTURE.md and docs/PRD.md",
+      "Confirm Three.js does NOT use eval() in its production bundle before approving script-src 'self' without unsafe-eval",
+      "Confirm Vite production build does NOT inject inline scripts into index.html",
+      "Approve and merge PR #50 to main to unblock frontend-test and frontend coding agents",
+      "On approval, frontend-test agent should read the merged LLD from main before writing tests T-SEC-002-01 through T-SEC-002-05"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-SEC-002/LOW_LEVEL_DESIGN.md",
+      "https://github.com/sreenivasmrpivot/legobuilder/pull/50",
+      "frontend/nginx.conf",
+      "frontend/vite.config.ts",
+      "frontend/eslint.config.js",
+      "frontend/index.html"
+    ]
+  },
+  "issue_number": 31,
+  "fr_id": "NFR-SEC-002",
+  "branch": "feature/31-nfr-sec-002-design",
+  "pr_number": 50,
+  "area": "frontend"
+}
