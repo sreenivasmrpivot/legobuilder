@@ -1,40 +1,58 @@
 /**
  * Store: cameraStore
  *
- * Manages camera state: position, target, zoom level, and preset tracking.
+ * Manages camera state: position, target, fov, clipping planes, and zoom.
+ * Default isometric camera position per LLD §3.1.
  *
- * This is a scaffold stub. Feature implementation will be done in
- * feature branches per the PM-Issues agent's issue plan.
+ * FR: FR-SCENE-001
+ * LLD: docs/features/FR-SCENE-001/LOW_LEVEL_DESIGN.md §3.1, §4.1
+ *
+ * Spectra-Agent: frontend-coding
+ * Spectra-FRs: FR-SCENE-001
  */
 
 import { create } from 'zustand';
 
-interface CameraState {
+export interface CameraState {
+  /** Camera position in world space [x, y, z] */
   position: [number, number, number];
+  /** Camera look-at target [x, y, z] */
   target: [number, number, number];
+  /** Vertical field of view in degrees */
+  fov: number;
+  /** Near clipping plane */
+  near: number;
+  /** Far clipping plane */
+  far: number;
+  /** Zoom level */
   zoom: number;
-  setPosition: (pos: [number, number, number]) => void;
+}
+
+export interface CameraActions {
+  setPosition: (position: [number, number, number]) => void;
   setTarget: (target: [number, number, number]) => void;
+  setFov: (fov: number) => void;
   setZoom: (zoom: number) => void;
   resetCamera: () => void;
 }
 
-const DEFAULT_POSITION: [number, number, number] = [20, 20, 20];
-const DEFAULT_TARGET: [number, number, number] = [0, 0, 0];
-const DEFAULT_ZOOM = 1;
+export type CameraStore = CameraState & CameraActions;
 
-export const useCameraStore = create<CameraState>()((set) => ({
-  position: DEFAULT_POSITION,
-  target: DEFAULT_TARGET,
-  zoom: DEFAULT_ZOOM,
+const DEFAULT_CAMERA: CameraState = {
+  position: [10, 10, 10],
+  target: [0, 0, 0],
+  fov: 50,
+  near: 0.1,
+  far: 1000,
+  zoom: 1,
+};
+
+export const useCameraStore = create<CameraStore>()((set) => ({
+  ...DEFAULT_CAMERA,
 
   setPosition: (position) => set({ position }),
   setTarget: (target) => set({ target }),
+  setFov: (fov) => set({ fov }),
   setZoom: (zoom) => set({ zoom }),
-  resetCamera: () =>
-    set({
-      position: DEFAULT_POSITION,
-      target: DEFAULT_TARGET,
-      zoom: DEFAULT_ZOOM,
-    }),
+  resetCamera: () => set({ ...DEFAULT_CAMERA }),
 }));
