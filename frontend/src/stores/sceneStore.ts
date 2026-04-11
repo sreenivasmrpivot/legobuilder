@@ -1,56 +1,73 @@
+/**
+ * Store: sceneStore
+ *
+ * Manages scene-level state: grid visibility, background color,
+ * lighting intensities, and brick collection.
+ *
+ * FR: FR-SCENE-001
+ * LLD: docs/features/FR-SCENE-001/LOW_LEVEL_DESIGN.md §3.2, §4.2
+ *
+ * Spectra-Agent: frontend-coding
+ * Spectra-FRs: FR-SCENE-001
+ */
+
 import { create } from 'zustand';
-import { immer } from 'zustand/middleware/immer';
-import type { Brick, BrickType } from '@/types/brick';
+import type { Brick } from '@/types/brick';
 
 export interface SceneState {
-  bricks: Map<string, Brick>;
-  baseplate: { width: number; depth: number };
-  activeBrickType: BrickType | null;
-  activeColor: string;
-  addBrick: (brick: Brick) => void;
-  removeBrick: (id: string) => void;
-  updateBrick: (id: string, updates: Partial<Brick>) => void;
-  clearScene: () => void;
-  setActiveBrickType: (type: BrickType | null) => void;
-  setActiveColor: (color: string) => void;
+  /** Whether the ground grid is visible */
+  showGrid: boolean;
+  /** Background color of the canvas (CSS hex string) */
+  backgroundColor: string;
+  /** Ambient light intensity (0.0 – 1.0) */
+  ambientIntensity: number;
+  /** Directional light intensity (0.0 – 1.0) */
+  directionalIntensity: number;
+  /** Collection of bricks in the scene */
+  bricks: Brick[];
 }
 
-export const useSceneStore = create<SceneState>()(
-  immer((set) => ({
-    bricks: new Map(),
-    baseplate: { width: 32, depth: 32 },
-    activeBrickType: null,
-    activeColor: '#D01012',
+export interface SceneActions {
+  toggleGrid: () => void;
+  setBackgroundColor: (color: string) => void;
+  setAmbientIntensity: (intensity: number) => void;
+  setDirectionalIntensity: (intensity: number) => void;
+  addBrick: (brick: Brick) => void;
+  removeBrick: (id: string) => void;
+  clearScene: () => void;
+}
 
-    addBrick: (brick) =>
-      set((state) => {
-        state.bricks.set(brick.id, brick);
-      }),
+export type SceneStore = SceneState & SceneActions;
 
-    removeBrick: (id) =>
-      set((state) => {
-        state.bricks.delete(id);
-      }),
+const DEFAULT_SCENE: SceneState = {
+  showGrid: true,
+  backgroundColor: '#1a1a2e',
+  ambientIntensity: 0.4,
+  directionalIntensity: 0.8,
+  bricks: [],
+};
 
-    updateBrick: (id, updates) =>
-      set((state) => {
-        const brick = state.bricks.get(id);
-        if (brick) Object.assign(brick, updates);
-      }),
+export const useSceneStore = create<SceneStore>()((set) => ({
+  ...DEFAULT_SCENE,
 
-    clearScene: () =>
-      set((state) => {
-        state.bricks.clear();
-      }),
+  toggleGrid: () =>
+    set((state) => ({ showGrid: !state.showGrid })),
 
-    setActiveBrickType: (type) =>
-      set((state) => {
-        state.activeBrickType = type;
-      }),
+  setBackgroundColor: (backgroundColor) =>
+    set({ backgroundColor }),
 
-    setActiveColor: (color) =>
-      set((state) => {
-        state.activeColor = color;
-      }),
-  }))
-);
+  setAmbientIntensity: (ambientIntensity) =>
+    set({ ambientIntensity }),
+
+  setDirectionalIntensity: (directionalIntensity) =>
+    set({ directionalIntensity }),
+
+  addBrick: (brick) =>
+    set((state) => ({ bricks: [...state.bricks, brick] })),
+
+  removeBrick: (id) =>
+    set((state) => ({ bricks: state.bricks.filter((b) => b.id !== id) })),
+
+  clearScene: () =>
+    set({ bricks: [] }),
+}));
