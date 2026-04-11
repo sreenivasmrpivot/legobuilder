@@ -1,529 +1,636 @@
-# Low-Level Design: FR-SCENE-001 — 3D Scene Rendering with Three.js Ground Grid
+# Low-Level Design: FR-SCENE-001
+## Render 3D Scene with Three.js and Visible Ground Grid Plane
 
-**Feature ID:** FR-SCENE-001
-**Issue:** [#8](https://github.com/sreenivasmrpivot/legobuilder/issues/8)
-**Status:** Draft — Pending Design Review (Gate 6a)
-**Author:** Spectra Design Agent
-**Date:** 2026-04-10
-**Stack:** React 18 · TypeScript · Three.js · @react-three/fiber · @react-three/drei · Zustand
+**Feature ID:** FR-SCENE-001  
+**Issue:** #8  
+**Status:** Draft — Awaiting Gate 6a Design Review  
+**Author:** Spectra Design Agent  
+**Date:** 2026-04-11  
+
+---
+
+## Table of Contents
+
+1. [Overview](#1-overview)
+2. [Component Architecture](#2-component-architecture)
+3. [Data Models & Interfaces](#3-data-models--interfaces)
+4. [API / Store Contracts](#4-api--store-contracts)
+5. [Sequence Diagrams](#5-sequence-diagrams)
+6. [Error Handling Strategy](#6-error-handling-strategy)
+7. [Security Considerations](#7-security-considerations)
+8. [Performance Budget](#8-performance-budget)
+9. [Test Case Mapping](#9-test-case-mapping)
+10. [Open Questions & Assumptions](#10-open-questions--assumptions)
 
 ---
 
 ## 1. Overview
 
-FR-SCENE-001 establishes the **foundational 3D rendering surface** for the LegoBuilder application. It delivers a Three.js scene (via `@react-three/fiber`) with a visible ground grid plane at 1-stud intervals extending at least 32×32 studs. This is the critical-path feature upon which all brick placement, camera control, and editing features depend.
+FR-SCENE-001 establishes the foundational 3D rendering surface for the LEGO Builder application. It introduces:
 
-### 1.1 Scope
+- A `<SceneViewport>` React component that mounts a `@react-three/fiber` `<Canvas>` as the root WebGL context.
+- A `<GroundGrid>` Three.js component that renders a visible grid plane at 1-stud intervals extending ≥32×32 studs.
+- A `cameraStore` (Zustand) that holds the default isometric camera position and exposes camera state to the rest of the application.
+- A `sceneStore` (Zustand) that manages scene-level state (background color, ambient light settings, grid visibility flag).
 
-| In Scope | Out of Scope |
-|---|---|
-| Three.js scene initialisation | Brick geometry / placement (FR-BRICK-*) |
-| Ground grid plane (32×32 studs, 1-stud intervals) | Camera orbit controls (FR-CAM-001) |
-| Scene store (Zustand) | Lighting beyond ambient + directional |
-| Canvas wrapper component | Export / persistence |
-| Performance baseline (>=60 FPS empty scene) | Shadow maps (deferred to NFR-PERF-001) |
+This feature has **no upstream dependencies** and is the first feature to be implemented. All subsequent brick-placement and editing features depend on this rendering surface.
 
-### 1.2 Acceptance Criteria (from Issue #8)
+### Acceptance Criteria (from Issue #8)
 
-| ID | Criterion |
-|---|---|
-| AC-1 | Ground grid plane visible with grid lines at 1-stud intervals on load |
-| AC-2 | Grid extends >=32×32 studs when scene is empty |
-| AC-3 | Empty scene achieves >=60 FPS on mid-range device (Intel i5 + integrated GPU) |
+| # | Criterion |
+|---|----------|
+| AC-1 | Ground grid plane is visible with grid lines at 1-stud intervals when the canvas renders. |
+| AC-2 | Grid extends at least 32×32 studs when the scene is empty. |
+| AC-3 | Empty scene achieves ≥60 FPS on a mid-range device (Intel i5 + integrated GPU). |
 
 ---
 
 ## 2. Component Architecture
 
-### 2.1 Component Tree
+### 2.1 Module Map
 
 ```
-App
-└── ViewportCanvas          (frontend/src/components/viewport/ViewportCanvas.tsx)
-    └── <Canvas>            (@react-three/fiber root — owns WebGL context)
-        ├── SceneLighting   (frontend/src/components/viewport/SceneLighting.tsx)
-        ├── GroundGrid      (frontend/src/components/viewport/GroundGrid.tsx)
-        └── SceneRoot       (frontend/src/components/viewport/SceneRoot.tsx)
-            └── [future brick objects rendered here]
+frontend/src/
+├── components/
+│   └── viewport/
+│       ├── SceneViewport.tsx       ← Root canvas wrapper (NEW)
+│       ├── GroundGrid.tsx          ← Grid mesh component (NEW)
+│       └── SceneErrorBoundary.tsx  ← WebGL error boundary (NEW)
+├── stores/
+│   ├── sceneStore.ts               ← Scene state (NEW)
+│   └── cameraStore.ts              ← Camera state (NEW)
+├── errors/
+│   └── SceneErrors.ts              ← SceneInitError class (NEW)
+└── App.tsx                         ← Mounts <SceneViewport> (MODIFIED)
 ```
 
-### 2.2 Component Responsibilities
+### 2.2 Component Descriptions
 
-#### `ViewportCanvas` (container)
-- Renders the `@react-three/fiber` `<Canvas>` with fixed camera defaults.
-- Passes `gl`, `camera`, and `dpr` props to the Canvas.
-- Subscribes to `sceneStore` for scene-level flags (e.g., `gridVisible`).
-- Owns the CSS container that sizes the canvas to fill its parent.
+#### `SceneViewport` (`frontend/src/components/viewport/SceneViewport.tsx`)
 
-#### `GroundGrid` (presentational 3D)
-- Renders the ground grid using `@react-three/drei` `<Grid>` helper.
-- Props: `size` (default 32), `divisions` (default 32), `colorCenterLine`, `colorGrid`.
-- Positioned at `y = 0` (world origin).
-- Stateless — reads grid config from `sceneStore.gridConfig`.
+**Responsibility:** Mount the `@react-three/fiber` `<Canvas>` element, configure the WebGL renderer, set up lighting, and render child scene components including `<GroundGrid>`.
 
-#### `SceneLighting` (presentational 3D)
-- Renders `<ambientLight>` and `<directionalLight>` primitives.
-- Intensity and position driven by `sceneStore.lightingConfig`.
+**Props interface:**
+```typescript
+interface SceneViewportProps {
+  className?: string;   // Optional CSS class for the canvas wrapper div
+}
+```
 
-#### `SceneRoot` (container 3D)
-- Acts as the mount point for all dynamic scene objects (bricks, etc.).
-- Subscribes to `sceneStore.objects` array (empty for FR-SCENE-001).
+**Internal structure (pseudocode):**
+```tsx
+const SceneViewport: React.FC<SceneViewportProps> = ({ className }) => {
+  const { position, fov, near, far } = useCameraStore(cameraSelector, shallow);
+  const backgroundColor = useSceneStore((s) => s.backgroundColor);
 
-### 2.3 Module Dependency Graph
+  const safePosition = isValidPosition(position) ? position : DEFAULT_CAMERA.position;
+
+  return (
+    <div className={className} style={{ width: '100%', height: '100%' }}>
+      <Canvas
+        camera={{ position: safePosition, fov, near, far }}
+        gl={{ antialias: true, powerPreference: 'high-performance' }}
+        shadows={false}
+        frameloop="demand"
+        onCreated={({ gl }) => {
+          gl.setClearColor(backgroundColor);
+        }}
+      >
+        <ambientLight intensity={0.6} />
+        <directionalLight position={[10, 20, 10]} intensity={0.8} />
+        <GroundGrid />
+        {/* Future: <BrickLayer />, <SelectionHighlight />, etc. */}
+      </Canvas>
+    </div>
+  );
+};
+```
+
+**Key decisions:**
+- `frameloop="demand"` is used initially; will switch to `"always"` when animated bricks are introduced.
+- `shadows={false}` keeps the empty scene well above 60 FPS on integrated GPUs.
+- The `<Canvas>` fills its parent container via CSS (`width: 100%; height: 100%`). The parent is responsible for sizing.
+- Camera position is validated before use; falls back to `DEFAULT_CAMERA.position` if invalid.
+
+#### `GroundGrid` (`frontend/src/components/viewport/GroundGrid.tsx`)
+
+**Responsibility:** Render a visible grid plane on the XZ plane (Y=0) using Three.js `GridHelper` wrapped in a `@react-three/fiber` primitive.
+
+**Props interface:**
+```typescript
+interface GroundGridProps {
+  size?: number;         // Total grid size in studs (default: 32)
+  divisions?: number;    // Number of grid divisions (default: 32, giving 1-stud intervals)
+  colorCenter?: string;  // Center line color (default: '#888888')
+  colorGrid?: string;    // Grid line color (default: '#444444')
+}
+```
+
+**Internal structure (pseudocode):**
+```tsx
+const GroundGrid: React.FC<GroundGridProps> = ({
+  size = 32,
+  divisions = 32,
+  colorCenter = '#888888',
+  colorGrid = '#444444',
+}) => {
+  const gridVisible = useSceneStore((s) => s.gridVisible);
+
+  if (!gridVisible) return null;
+
+  return (
+    <gridHelper
+      args={[size, divisions, colorCenter, colorGrid]}
+      position={[0, 0, 0]}
+    />
+  );
+};
+```
+
+**Key decisions:**
+- `size=32, divisions=32` → 32 cells × 1 stud each = 32×32 stud grid. Satisfies AC-2.
+- Grid is placed at Y=0 (ground plane). Bricks will be placed at Y≥0.
+- `GridHelper` is a single draw call — negligible GPU cost.
+- Grid visibility is controlled by `sceneStore.gridVisible` flag; the component reads this and conditionally renders.
+- `size` and `divisions` props are capped at 128 to prevent DoS via oversized grids.
+
+#### `SceneErrorBoundary` (`frontend/src/components/viewport/SceneErrorBoundary.tsx`)
+
+**Responsibility:** Catch WebGL initialization errors and render a user-friendly fallback UI.
+
+See Section 6.2 for full implementation pseudocode.
+
+### 2.3 Dependency Graph
 
 ```
-ViewportCanvas
-  ├── @react-three/fiber (Canvas, useFrame, useThree)
-  ├── @react-three/drei  (Grid, OrthographicCamera)
-  ├── sceneStore         (Zustand)
-  ├── GroundGrid
-  ├── SceneLighting
-  └── SceneRoot
-
-GroundGrid
-  └── @react-three/drei (Grid)
-
-SceneLighting
-  └── @react-three/fiber (primitives)
-
-SceneRoot
-  └── sceneStore (objects selector)
+App.tsx
+  └── SceneErrorBoundary
+        └── SceneViewport
+              ├── @react-three/fiber Canvas
+              │     ├── ambientLight
+              │     ├── directionalLight
+              │     └── GroundGrid
+              │           └── gridHelper (Three.js primitive)
+              ├── cameraStore (reads: position, fov, near, far)
+              └── sceneStore (reads: gridVisible, backgroundColor)
 ```
 
 ---
 
-## 3. Data Models
+## 3. Data Models & Interfaces
 
-### 3.1 Scene Store (`sceneStore.ts`)
-
-Managed by Zustand. Single source of truth for scene-level state.
-
-```typescript
-// frontend/src/stores/sceneStore.ts
-
-export interface GridConfig {
-  size: number;            // studs — default 32
-  divisions: number;       // grid lines — default 32
-  colorCenterLine: string; // hex — default '#888888'
-  colorGrid: string;       // hex — default '#444444'
-  visible: boolean;        // default true
-}
-
-export interface LightingConfig {
-  ambientIntensity: number;                       // default 0.6
-  directionalIntensity: number;                   // default 0.8
-  directionalPosition: [number, number, number];  // default [10, 20, 10]
-}
-
-export interface SceneObject {
-  id: string;
-  type: 'brick' | 'group';
-  // Extended by FR-BRICK-* features
-}
-
-export interface SceneState {
-  // Grid
-  gridConfig: GridConfig;
-  setGridConfig: (patch: Partial<GridConfig>) => void;
-
-  // Lighting
-  lightingConfig: LightingConfig;
-  setLightingConfig: (patch: Partial<LightingConfig>) => void;
-
-  // Scene objects (populated by FR-BRICK-001+)
-  objects: SceneObject[];
-  addObject: (obj: SceneObject) => void;
-  removeObject: (id: string) => void;
-  clearScene: () => void;
-
-  // Meta
-  isInitialised: boolean;
-  setInitialised: (v: boolean) => void;
-}
-```
-
-**Zustand store factory:**
-
-```typescript
-export const useSceneStore = create<SceneState>()(immer((set) => ({
-  gridConfig: {
-    size: 32,
-    divisions: 32,
-    colorCenterLine: '#888888',
-    colorGrid: '#444444',
-    visible: true,
-  },
-  setGridConfig: (patch) => set((s) => { Object.assign(s.gridConfig, patch); }),
-
-  lightingConfig: {
-    ambientIntensity: 0.6,
-    directionalIntensity: 0.8,
-    directionalPosition: [10, 20, 10],
-  },
-  setLightingConfig: (patch) => set((s) => { Object.assign(s.lightingConfig, patch); }),
-
-  objects: [],
-  addObject: (obj) => set((s) => { s.objects.push(obj); }),
-  removeObject: (id) => set((s) => { s.objects = s.objects.filter(o => o.id !== id); }),
-  clearScene: () => set((s) => { s.objects = []; }),
-
-  isInitialised: false,
-  setInitialised: (v) => set((s) => { s.isInitialised = v; }),
-})));
-```
-
-### 3.2 Camera Store (`cameraStore.ts`)
-
-FR-SCENE-001 seeds the default isometric camera position. FR-CAM-001 will extend this store.
+### 3.1 `CameraState`
 
 ```typescript
 // frontend/src/stores/cameraStore.ts
 
-export interface CameraState {
-  position: [number, number, number];              // default [20, 20, 20]
-  target: [number, number, number];                // default [0, 0, 0]
-  zoom: number;                                    // default 1.0
-  projectionType: 'perspective' | 'orthographic';  // default 'perspective'
+interface CameraState {
+  /** Camera position in world space [x, y, z] */
+  position: [number, number, number];
+  /** Camera look-at target [x, y, z] */
+  target: [number, number, number];
+  /** Vertical field of view in degrees */
+  fov: number;
+  /** Near clipping plane */
+  near: number;
+  /** Far clipping plane */
+  far: number;
+  /** Zoom level (for orthographic-style isometric feel) */
+  zoom: number;
 }
+
+interface CameraActions {
+  setPosition(position: [number, number, number]): void;
+  setTarget(target: [number, number, number]): void;
+  setZoom(zoom: number): void;
+  resetCamera(): void;
+}
+
+type CameraStore = CameraState & CameraActions;
 ```
 
-### 3.3 Stud Unit Convention
+**Default isometric camera position:**
+```typescript
+const DEFAULT_CAMERA: CameraState = {
+  position: [20, 20, 20],   // 45° isometric angle
+  target:   [0, 0, 0],
+  fov:      50,
+  near:     0.1,
+  far:      1000,
+  zoom:     1,
+};
+```
 
-| Constant | Value | Notes |
-|---|---|---|
-| `STUD_SIZE` | `1.0` (Three.js units) | 1 Three.js unit = 1 LEGO stud |
-| `PLATE_HEIGHT` | `0.4` | Standard LEGO plate height |
-| `BRICK_HEIGHT` | `1.2` | Standard LEGO brick height |
-| `GRID_ORIGIN` | `[0, 0, 0]` | World origin = grid centre |
+**Rationale for `[20, 20, 20]`:** Equal X/Y/Z components produce a classic isometric view. The distance of 20 units ensures the full 32×32 grid is visible at default zoom.
 
-All geometry in the application uses these constants from `frontend/src/constants/units.ts`.
+### 3.2 `SceneState`
+
+```typescript
+// frontend/src/stores/sceneStore.ts
+
+interface SceneState {
+  /** Whether the ground grid is visible */
+  gridVisible: boolean;
+  /** Background color of the canvas (CSS hex string) */
+  backgroundColor: string;
+  /** Ambient light intensity (0.0 – 1.0) */
+  ambientIntensity: number;
+  /** Directional light intensity (0.0 – 1.0) */
+  directionalIntensity: number;
+}
+
+interface SceneActions {
+  setGridVisible(visible: boolean): void;
+  setBackgroundColor(color: string): void;
+  setAmbientIntensity(intensity: number): void;
+  setDirectionalIntensity(intensity: number): void;
+}
+
+type SceneStore = SceneState & SceneActions;
+```
+
+**Default scene state:**
+```typescript
+const DEFAULT_SCENE: SceneState = {
+  gridVisible:           true,
+  backgroundColor:       '#1a1a2e',  // Dark navy — LEGO-builder aesthetic
+  ambientIntensity:      0.6,
+  directionalIntensity:  0.8,
+};
+```
+
+### 3.3 `SceneInitError`
+
+```typescript
+// frontend/src/errors/SceneErrors.ts
+
+type SceneErrorCode =
+  | 'WEBGL_CONTEXT_LOST'
+  | 'CANVAS_MOUNT_FAILED'
+  | 'RENDERER_INIT_FAILED';
+
+export class SceneInitError extends Error {
+  readonly code: SceneErrorCode;
+
+  constructor(
+    code: SceneErrorCode,
+    message: string,
+    public readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = 'SceneInitError';
+    this.code = code;
+  }
+}
+```
 
 ---
 
-## 4. API / Interface Contracts
+## 4. API / Store Contracts
 
-> FR-SCENE-001 is a **pure frontend feature** — there are no backend API endpoints. All state is client-side (Zustand). The "API" surface is the component props interface and the store selectors.
+This feature is entirely client-side. There are **no HTTP API endpoints**. All contracts are Zustand store interfaces.
 
-### 4.1 `ViewportCanvas` Props
+### 4.1 `cameraStore` — Full Contract
 
 ```typescript
-export interface ViewportCanvasProps {
-  /** CSS class applied to the outer div wrapper */
-  className?: string;
-  /** Override canvas background colour (default: '#1a1a2e') */
-  background?: string;
-  /** Device pixel ratio cap (default: Math.min(window.devicePixelRatio, 2)) */
-  dpr?: number | [number, number];
-}
+// frontend/src/stores/cameraStore.ts
+
+const useCameraStore = create<CameraStore>((set) => ({
+  // State
+  ...DEFAULT_CAMERA,
+
+  // Actions
+  setPosition: (position) => set({ position }),
+  setTarget:   (target)   => set({ target }),
+  setZoom:     (zoom)     => set({ zoom }),
+  resetCamera: ()         => set({ ...DEFAULT_CAMERA }),
+}));
+
+export default useCameraStore;
 ```
 
-### 4.2 `GroundGrid` Props
+**Consumers:**
+- `SceneViewport` — reads `position`, `fov`, `near`, `far` to configure `<Canvas camera={...}>`.
+- Future: `CameraControls` component will call `setPosition`, `setTarget`, `setZoom`.
+
+### 4.2 `sceneStore` — Full Contract
 
 ```typescript
-export interface GroundGridProps {
-  /** Number of studs along each axis (default: 32) */
-  size?: number;
-  /** Number of grid divisions (default: 32) */
-  divisions?: number;
-  /** Hex colour for centre lines (default: '#888888') */
-  colorCenterLine?: string;
-  /** Hex colour for grid lines (default: '#444444') */
-  colorGrid?: string;
-}
+// frontend/src/stores/sceneStore.ts
+
+const useSceneStore = create<SceneStore>((set) => ({
+  // State
+  ...DEFAULT_SCENE,
+
+  // Actions
+  setGridVisible:          (gridVisible)          => set({ gridVisible }),
+  setBackgroundColor:      (backgroundColor)      => set({ backgroundColor }),
+  setAmbientIntensity:     (ambientIntensity)     => set({ ambientIntensity }),
+  setDirectionalIntensity: (directionalIntensity) => set({ directionalIntensity }),
+}));
+
+export default useSceneStore;
 ```
 
-### 4.3 `SceneLighting` Props
+**Consumers:**
+- `GroundGrid` — reads `gridVisible` to conditionally render.
+- `SceneViewport` — reads `backgroundColor` to set canvas background.
+- Future: `SceneSettingsPanel` will call all setters.
+
+### 4.3 Store Selector Pattern
+
+All components use **shallow selectors** to prevent unnecessary re-renders:
 
 ```typescript
-export interface SceneLightingProps {
-  ambientIntensity?: number;                       // default 0.6
-  directionalIntensity?: number;                   // default 0.8
-  directionalPosition?: [number, number, number];  // default [10, 20, 10]
-}
-```
+// GroundGrid.tsx
+const gridVisible = useSceneStore((s) => s.gridVisible);
 
-### 4.4 Store Selectors (public API)
-
-```typescript
-// Consumers use fine-grained selectors to avoid unnecessary re-renders
-const gridConfig    = useSceneStore(s => s.gridConfig);
-const gridVisible   = useSceneStore(s => s.gridConfig.visible);
-const objects       = useSceneStore(s => s.objects);
-const isInitialised = useSceneStore(s => s.isInitialised);
+// SceneViewport.tsx — camera selector
+const cameraSelector = (s: CameraStore) => ({
+  position: s.position,
+  fov:      s.fov,
+  near:     s.near,
+  far:      s.far,
+});
+const { position, fov, near, far } = useCameraStore(cameraSelector, shallow);
 ```
 
 ---
 
 ## 5. Sequence Diagrams
 
-### 5.1 Application Boot -> Scene Render
+### 5.1 Application Bootstrap — Scene Initialization
 
 ```mermaid
 sequenceDiagram
     participant Browser
-    participant React
-    participant ViewportCanvas
-    participant R3F as @react-three/fiber Canvas
-    participant SceneStore as sceneStore (Zustand)
-    participant GroundGrid
-    participant SceneLighting
+    participant App as App.tsx
+    participant EB as SceneErrorBoundary
+    participant SV as SceneViewport
+    participant CS as cameraStore
+    participant SS as sceneStore
+    participant Canvas as R3F Canvas
+    participant GG as GroundGrid
 
-    Browser->>React: Load index.html -> mount App
-    React->>ViewportCanvas: render()
-    ViewportCanvas->>SceneStore: read gridConfig, lightingConfig
-    SceneStore-->>ViewportCanvas: { gridConfig, lightingConfig }
-    ViewportCanvas->>R3F: mount Canvas gl dpr camera
-    R3F->>R3F: create WebGLRenderer, Scene, Camera
-    R3F->>SceneLighting: mount()
-    SceneLighting->>R3F: add ambientLight + directionalLight to scene
-    R3F->>GroundGrid: mount()
-    GroundGrid->>R3F: add Grid mesh to scene (32x32, y=0)
-    R3F->>Browser: requestAnimationFrame loop starts
-    Browser-->>Browser: render frame (>=60 FPS target)
-    R3F->>SceneStore: setInitialised(true)
+    Browser->>App: React.render(<App />)
+    App->>EB: render <SceneErrorBoundary>
+    EB->>SV: render <SceneViewport />
+    SV->>CS: read position, fov, near, far
+    CS-->>SV: { position:[20,20,20], fov:50, near:0.1, far:1000 }
+    SV->>SS: read backgroundColor
+    SS-->>SV: '#1a1a2e'
+    SV->>Canvas: mount <Canvas camera={...} gl={...}>
+    Canvas->>Canvas: WebGL context created
+    Canvas->>GG: render <GroundGrid />
+    GG->>SS: read gridVisible
+    SS-->>GG: true
+    GG->>Canvas: add GridHelper(32, 32) to scene
+    Canvas-->>Browser: First frame rendered (grid visible)
 ```
 
-### 5.2 Grid Config Update Flow
+### 5.2 Grid Visibility Toggle
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant UIPanel as UI Settings Panel
-    participant SceneStore as sceneStore
-    participant GroundGrid
+    participant UI as SettingsPanel (future)
+    participant SS as sceneStore
+    participant GG as GroundGrid
+    participant Canvas as R3F Canvas
 
-    User->>UIPanel: toggle grid visibility
-    UIPanel->>SceneStore: setGridConfig({ visible: false })
-    SceneStore-->>GroundGrid: selector fires (gridConfig.visible changed)
-    GroundGrid->>GroundGrid: re-render with visible=false
-    GroundGrid->>R3F: Grid mesh removed from scene graph
+    User->>UI: toggle grid visibility
+    UI->>SS: setGridVisible(false)
+    SS->>SS: state update { gridVisible: false }
+    SS-->>GG: re-render triggered (Zustand subscription)
+    GG->>Canvas: return null (conditional render)
+    Canvas-->>User: grid disappears from scene
 ```
 
-### 5.3 Performance Monitoring Loop
+### 5.3 Camera Reset
 
 ```mermaid
 sequenceDiagram
-    participant R3F as R3F useFrame
-    participant PerfMonitor as PerformanceMonitor
-    participant DevTools as Dev Overlay (dev only)
+    participant User
+    participant UI as Toolbar (future)
+    participant CS as cameraStore
+    participant SV as SceneViewport
+    participant Canvas as R3F Canvas
 
-    loop Every animation frame
-        R3F->>PerfMonitor: onFrame(delta, state)
-        PerfMonitor->>PerfMonitor: compute rolling FPS (last 60 frames)
-        PerfMonitor-->>DevTools: emit fps (dev mode only)
+    User->>UI: click "Reset Camera"
+    UI->>CS: resetCamera()
+    CS->>CS: state update { position:[20,20,20], ... }
+    CS-->>SV: re-render triggered (Zustand subscription)
+    SV->>Canvas: update camera props
+    Canvas-->>User: camera returns to isometric default
+```
+
+### 5.4 WebGL Context Loss (Error Path)
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Canvas as R3F Canvas
+    participant SV as SceneViewport
+    participant EB as SceneErrorBoundary
+
+    Browser->>Canvas: webglcontextlost event
+    Canvas->>Canvas: attempt context restore
+    alt Context restored
+        Canvas-->>Browser: rendering resumes normally
+    else Context not restored
+        Canvas->>SV: onCreated callback throws
+        SV->>EB: throw SceneInitError('WEBGL_CONTEXT_LOST', ...)
+        EB->>EB: getDerivedStateFromError → { hasError: true }
+        EB-->>Browser: render fallback UI ("3D not available")
     end
 ```
 
 ---
 
-## 6. File Structure
+## 6. Error Handling Strategy
 
-```
-frontend/src/
-├── components/
-│   └── viewport/
-│       ├── ViewportCanvas.tsx       <- Canvas wrapper + R3F root
-│       ├── ViewportCanvas.test.tsx  <- Unit + integration tests
-│       ├── GroundGrid.tsx           <- Grid plane component
-│       ├── GroundGrid.test.tsx
-│       ├── SceneLighting.tsx        <- Ambient + directional lights
-│       ├── SceneLighting.test.tsx
-│       ├── SceneRoot.tsx            <- Mount point for scene objects
-│       └── index.ts                 <- Barrel export
-├── stores/
-│   ├── sceneStore.ts               <- Zustand scene store
-│   ├── sceneStore.test.ts
-│   ├── cameraStore.ts              <- Zustand camera store (seeded here)
-│   └── cameraStore.test.ts
-└── constants/
-    └── units.ts                    <- STUD_SIZE, PLATE_HEIGHT, BRICK_HEIGHT
-```
+### 6.1 Error Conditions Table
 
----
+| Condition | Error Code | Handler | User-Visible Fallback |
+|-----------|-----------|---------|----------------------|
+| WebGL not supported by browser | `WEBGL_CONTEXT_LOST` | React ErrorBoundary | "Your browser does not support 3D rendering. Please use Chrome, Firefox, or Edge." |
+| WebGL context lost mid-session | `WEBGL_CONTEXT_LOST` | R3F `onCreated` + ErrorBoundary | "3D rendering was interrupted. Please refresh the page." |
+| Canvas DOM mount failure | `CANVAS_MOUNT_FAILED` | React ErrorBoundary | "Failed to initialize the 3D canvas. Please refresh." |
+| Renderer initialization failure | `RENDERER_INIT_FAILED` | R3F `onCreated` + ErrorBoundary | "Failed to initialize the 3D renderer. Please refresh." |
+| `cameraStore` returns invalid position | N/A (validation) | Fallback to `DEFAULT_CAMERA` | None (silent recovery) |
 
-## 7. Error Handling Strategy
-
-### 7.1 WebGL Context Loss
-
-| Scenario | Detection | Recovery |
-|---|---|---|
-| GPU driver crash / tab backgrounded | `webglcontextlost` event on canvas | R3F handles automatically via `onContextLost` prop; show `ContextLostOverlay` UI |
-| WebGL not supported | `canvas.getContext('webgl2')` returns null | Render `WebGLUnsupportedFallback` with browser upgrade message |
-| Context restored | `webglcontextrestored` event | R3F re-initialises renderer; hide overlay |
+### 6.2 React Error Boundary
 
 ```typescript
-// ViewportCanvas.tsx — context loss handling
-// <Canvas
-//   onCreated={({ gl }) => {
-//     gl.domElement.addEventListener('webglcontextlost', handleContextLost);
-//     gl.domElement.addEventListener('webglcontextrestored', handleContextRestored);
-//   }}
-// >
+// frontend/src/components/viewport/SceneErrorBoundary.tsx
+
+class SceneErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; errorCode?: string }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError(error: Error) {
+    return {
+      hasError: true,
+      errorCode: (error as SceneInitError).code ?? 'UNKNOWN',
+    };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[SceneErrorBoundary]', error, info);
+    // Future: send to error telemetry service
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="scene-error-fallback" role="alert">
+          <p>
+            3D rendering is not available. Please refresh or try a different browser.
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 ```
 
-### 7.2 Render Error Boundary
+**Usage in `App.tsx`:**
+```tsx
+<SceneErrorBoundary>
+  <SceneViewport />
+</SceneErrorBoundary>
+```
 
-Wrap `<Canvas>` in a React Error Boundary (`SceneErrorBoundary`) that:
-- Catches render errors thrown inside the R3F tree.
-- Logs to `console.error` (and future telemetry hook).
-- Renders a user-friendly fallback UI with a "Reload Scene" button.
+### 6.3 Camera Position Validation
 
-### 7.3 Performance Degradation
-
-| Trigger | Action |
-|---|---|
-| FPS drops below 30 for >2 seconds | Log warning to console (dev) |
-| FPS drops below 15 for >5 seconds | Emit `scene:performance-warning` custom event for UI layer |
-
----
-
-## 8. Security Considerations
-
-| Concern | Mitigation |
-|---|---|
-| **XSS via scene data** | All scene state is typed (TypeScript); no `dangerouslySetInnerHTML`; no eval of scene data |
-| **Prototype pollution** | Zustand `immer` middleware uses structural cloning; no `Object.assign` on untrusted input |
-| **Canvas fingerprinting** | No canvas fingerprint data is exposed or transmitted; purely local rendering |
-| **Dependency supply chain** | Three.js, R3F, Drei pinned to exact versions in `package.json`; Dependabot enabled |
-| **CSP** | `script-src 'self'`; WebGL does not require `unsafe-eval`; no inline scripts |
-
----
-
-## 9. Performance Design
-
-### 9.1 Targets
-
-| Metric | Target | Measurement |
-|---|---|---|
-| FPS (empty scene) | >=60 FPS | Chrome DevTools Performance tab; `useFrame` delta |
-| Initial render time | <500 ms | `performance.mark('scene:ready')` |
-| JS bundle (viewport chunk) | <150 KB gzipped | Vite bundle analyser |
-| Memory (empty scene) | <50 MB GPU | Chrome GPU memory inspector |
-
-### 9.2 Optimisation Techniques
-
-| Technique | Applied Where |
-|---|---|
-| `dpr` cap at `Math.min(devicePixelRatio, 2)` | `ViewportCanvas` Canvas prop |
-| `frameloop='demand'` when scene is static | `ViewportCanvas` — switch to `'always'` when objects are added |
-| Grid geometry is shared (single instance) | `GroundGrid` — no per-frame allocation |
-| Zustand fine-grained selectors | All store consumers — prevents unnecessary re-renders |
-| React `memo` on all 3D components | `GroundGrid`, `SceneLighting`, `SceneRoot` |
-| Vite code-splitting: viewport chunk | `vite.config.ts` — `manualChunks: { viewport: ['@react-three/fiber', 'three'] }` |
-
-### 9.3 Frame Budget (empty scene, 60 FPS = 16.67 ms/frame)
-
-| Task | Budget |
-|---|---|
-| JavaScript (React reconciler + Zustand) | <=2 ms |
-| Three.js scene graph traversal | <=1 ms |
-| WebGL draw calls (grid only) | <=3 ms |
-| GPU rasterisation | <=8 ms |
-| Browser composite | <=2 ms |
-| **Total** | **<=16 ms** |
-
----
-
-## 10. Accessibility Considerations
-
-| Requirement | Implementation |
-|---|---|
-| Canvas `role` and `aria-label` | `<canvas role="img" aria-label="3D LEGO builder scene" />` |
-| Keyboard focus indicator | Canvas wrapper div has `tabIndex={0}` with visible focus ring (CSS outline) |
-| Reduced motion | `prefers-reduced-motion` media query disables non-essential animations; grid remains static |
-| Screen reader fallback | `<noscript>` and `<div aria-live="polite">` announce scene state changes |
-
----
-
-## 11. Testing Strategy
-
-### 11.1 Test Case Mapping
-
-| Test ID | Type | Description | Tool |
-|---|---|---|---|
-| T-BE-SCENE-001-01 | Unit | `GroundGrid` renders with correct size and divisions props | Vitest + @testing-library/react |
-| T-BE-SCENE-001-02 | Unit | `sceneStore` initialises with correct default gridConfig | Vitest |
-| T-E2E-SCENE-001-01 | E2E | Canvas is visible and grid is rendered on app load | Playwright |
-
-### 11.2 Unit Test Approach
+Before passing camera props to `<Canvas>`, `SceneViewport` validates the position array:
 
 ```typescript
-// GroundGrid.test.tsx
-import { render } from '@testing-library/react';
-import { Canvas } from '@react-three/fiber';
-import { GroundGrid } from './GroundGrid';
-
-test('renders grid with default 32x32 size', () => {
-  const { container } = render(
-    <Canvas>
-      <GroundGrid />
-    </Canvas>
+function isValidPosition(pos: unknown): pos is [number, number, number] {
+  return (
+    Array.isArray(pos) &&
+    pos.length === 3 &&
+    pos.every((v) => typeof v === 'number' && isFinite(v))
   );
-  expect(container.querySelector('canvas')).toBeInTheDocument();
-});
+}
 
-test('accepts custom size prop', () => {
-  // Verify prop forwarding to drei Grid
-  // ... mock drei Grid and assert props
-});
+const safePosition = isValidPosition(position) ? position : DEFAULT_CAMERA.position;
 ```
 
-### 11.3 E2E Test Approach
+---
 
+## 7. Security Considerations
+
+| # | Concern | Mitigation |
+|---|---------|------------|
+| 1 | **Prototype pollution via store state** | Zustand stores use plain objects with typed interfaces. No `Object.assign` from untrusted input. All setters accept only typed primitives. |
+| 2 | **XSS via `backgroundColor` CSS string** | `backgroundColor` is applied only as a Three.js scene background color (not injected into DOM innerHTML). Validated as a hex color string (`/^#[0-9a-fA-F]{6}$/`) before use. |
+| 3 | **WebGL shader injection** | `GridHelper` uses Three.js built-in `LineBasicMaterial` — no custom GLSL shaders in this feature. No user-controlled shader code. |
+| 4 | **Memory leak from unmounted Canvas** | R3F's `<Canvas>` disposes the WebGL context and all geometries/materials on unmount via its built-in cleanup. `GroundGrid` uses no external refs that could leak. |
+| 5 | **Denial of service via large grid size** | `GroundGrid` `size` and `divisions` props are capped at 128 at the component boundary. `GridHelper` with 128 divisions is a single draw call — no DoS risk. |
+
+---
+
+## 8. Performance Budget
+
+### 8.1 Targets (from AC-3)
+
+| Metric | Target | Measurement Method |
+|--------|--------|-------------------|
+| Frame rate (empty scene) | ≥60 FPS | Chrome DevTools Performance panel / `stats.js` |
+| Initial render time | ≤100 ms | React DevTools Profiler |
+| WebGL draw calls (empty scene) | ≤3 | Chrome DevTools → GPU tab |
+| JS heap (empty scene) | ≤20 MB | Chrome DevTools Memory |
+| Bundle size delta (Three.js + R3F) | ≤500 KB gzipped | Vite bundle analyzer |
+
+### 8.2 Performance Design Decisions
+
+| Decision | Rationale |
+|----------|----------|
+| `frameloop="demand"` on `<Canvas>` | Renders only when Zustand state changes. Eliminates idle GPU usage. |
+| `shadows={false}` | Shadow maps are expensive on integrated GPUs. Not needed for the empty scene. |
+| `GridHelper` (single draw call) | One `LineSegments` object — minimal GPU overhead. |
+| No `OrbitControls` in this feature | Avoids per-frame `requestAnimationFrame` loop from `drei`. |
+| Shallow Zustand selectors | Prevents unnecessary React re-renders from unrelated store updates. |
+| `powerPreference: 'high-performance'` | Hints to the browser to use the discrete GPU if available. |
+
+### 8.3 Frame Budget (16.67 ms at 60 FPS)
+
+| Phase | Budget | Notes |
+|-------|--------|-------|
+| React reconciliation | ≤2 ms | Minimal — only `SceneViewport` + `GroundGrid` in tree |
+| Three.js scene update | ≤1 ms | Static scene, no animations |
+| WebGL draw calls | ≤3 ms | ≤3 draw calls (grid + 2 lights) |
+| GPU rasterization | ≤5 ms | Grid lines on integrated GPU |
+| **Total** | **≤11 ms** | **5.67 ms headroom above 60 FPS budget** |
+
+---
+
+## 9. Test Case Mapping
+
+| Test ID | Description | Component Under Test | Assertion |
+|---------|-------------|---------------------|----------|
+| T-BE-SCENE-001-01 | Grid renders with correct size and divisions | `GroundGrid` | `GridHelper` args = `[32, 32, ...]`; grid is in scene graph |
+| T-BE-SCENE-001-02 | Camera store initializes with isometric defaults | `cameraStore` | `position === [20, 20, 20]`, `fov === 50` |
+| T-E2E-SCENE-001-01 | Full scene renders at ≥60 FPS on empty canvas | `SceneViewport` + `GroundGrid` | FPS ≥ 60 measured over 3-second window; grid lines visible in screenshot |
+
+### 9.1 Unit Test Pseudocode
+
+**T-BE-SCENE-001-01 — GroundGrid renders correctly:**
 ```typescript
-// e2e/scene.spec.ts
-test('ground grid is visible on load', async ({ page }) => {
-  await page.goto('/');
-  const canvas = page.locator('canvas');
-  await expect(canvas).toBeVisible();
-  await expect(page).toHaveScreenshot('empty-scene-grid.png');
+describe('GroundGrid', () => {
+  it('renders a GridHelper with size=32 and divisions=32 by default', () => {
+    const { scene } = renderR3F(<GroundGrid />);
+    const grid = scene.getObjectByType('GridHelper');
+    expect(grid).toBeDefined();
+    // GridHelper args: [size, divisions, colorCenter, colorGrid]
+    expect(grid.userData.size).toBe(32);
+    expect(grid.userData.divisions).toBe(32);
+  });
+
+  it('does not render when sceneStore.gridVisible is false', () => {
+    useSceneStore.setState({ gridVisible: false });
+    const { scene } = renderR3F(<GroundGrid />);
+    const grid = scene.getObjectByType('GridHelper');
+    expect(grid).toBeUndefined();
+  });
+});
+```
+
+**T-BE-SCENE-001-02 — cameraStore defaults:**
+```typescript
+describe('cameraStore', () => {
+  it('initializes with isometric camera position [20, 20, 20]', () => {
+    const { position } = useCameraStore.getState();
+    expect(position).toEqual([20, 20, 20]);
+  });
+
+  it('initializes with fov=50', () => {
+    const { fov } = useCameraStore.getState();
+    expect(fov).toBe(50);
+  });
+
+  it('resetCamera() restores default position', () => {
+    useCameraStore.getState().setPosition([0, 0, 0]);
+    useCameraStore.getState().resetCamera();
+    expect(useCameraStore.getState().position).toEqual([20, 20, 20]);
+  });
 });
 ```
 
 ---
 
-## 12. Implementation Notes for Coding Agent
+## 10. Open Questions & Assumptions
 
-1. **Do not** install new npm packages beyond those already in `package.json` (`three`, `@react-three/fiber`, `@react-three/drei`, `zustand`, `immer`).
-2. **Use** `@react-three/drei`'s `<Grid>` component (not `THREE.GridHelper`) — it supports `colorCenterLine` and `colorGrid` props natively.
-3. **Seed** `cameraStore` with `position: [20, 20, 20]` and `target: [0, 0, 0]` — FR-CAM-001 will add orbit controls on top.
-4. **Export** all components from `frontend/src/components/viewport/index.ts` barrel.
-5. **Mark** `frameloop='demand'` initially; the brick store (FR-BRICK-001) will switch to `'always'` when objects are added.
-6. **Do not** add shadow maps — deferred to NFR-PERF-001 performance optimisation phase.
-7. **Constants** file `frontend/src/constants/units.ts` must be created in this feature — it is a shared dependency for all subsequent FR-BRICK-* features.
-
----
-
-## 13. Open Questions / Risks
-
-| # | Question | Owner | Resolution |
-|---|---|---|---|
-| OQ-1 | Should the grid extend beyond 32x32 dynamically as bricks are placed near the edge? | Product | Deferred to FR-SCENE-003 (dynamic scene bounds) |
-| OQ-2 | Is `perspective` or `orthographic` camera the default? | Design | Perspective default; orthographic toggle in FR-CAM-002 |
-| OQ-3 | Grid colour scheme — dark theme only or theme-aware? | Design | Dark theme only for MVP; theming deferred post-MVP |
-| OQ-4 | Should `frameloop='demand'` be used from the start? | Engineering | Yes — switch to `'always'` in FR-BRICK-001 when objects animate |
-
----
-
-## 14. Dependencies & Sequencing
-
-```mermaid
-graph TD
-    A[FR-SCENE-001: 3D Scene + Grid] --> B[FR-SCENE-002: Lighting #7]
-    A --> C[FR-BRICK-001: Brick Placement #12]
-    A --> D[FR-CAM-001: Camera Controls #17]
-    A --> E[FR-UI-001: Toolbar #23]
-    B --> C
-    C --> F[FR-BRICK-002: Brick Selection #10]
-    C --> G[FR-EDIT-001: Undo/Redo #13]
-```
-
-FR-SCENE-001 has **no upstream dependencies** — it is the root of the dependency graph.
-
----
-
-## 15. Revision History
-
-| Version | Date | Author | Notes |
-|---|---|---|---|
-| 0.1 | 2026-04-10 | Spectra Design Agent | Initial draft — pending Gate 6a human review |
+| # | Question / Assumption | Severity | Resolution Needed Before |
+|---|----------------------|----------|-------------------------|
+| 1 | **Assumption:** `@react-three/fiber` and `@react-three/drei` are already listed as dependencies in `package.json`. If not, they must be added before implementation. | HIGH | Implementation start |
+| 2 | **Assumption:** `zustand` is already a project dependency (consistent with FR-EDIT-002 LLD). | HIGH | Implementation start |
+| 3 | **Open question:** Should `SceneViewport` use `frameloop="demand"` or `frameloop="always"`? `"demand"` is optimal for the empty scene but may need to change when animated bricks are added. Recommendation: start with `"demand"`, switch to `"always"` in a future FR. | MEDIUM | Implementation start |
+| 4 | **Open question:** What is the stud-to-Three.js-unit scale factor? This LLD assumes 1 stud = 1 Three.js unit. If the scale is different (e.g., 1 stud = 0.8 units), the grid `size` and camera `position` must be adjusted. | MEDIUM | Implementation start |
+| 5 | **Assumption:** The `<Canvas>` fills the full viewport (100vw × 100vh). If the app has a sidebar or toolbar, the parent container dimensions must be adjusted. | LOW | Implementation start |
+| 6 | **Open question:** Should `GroundGrid` support a `position` prop to offset the grid (e.g., for multi-floor builds)? Current assumption: grid is always at Y=0. | LOW | Future FR |
+| 7 | **Assumption:** `shallow` from `zustand/shallow` is available for selector optimization. If using Zustand v4+, import path may differ (`import { shallow } from 'zustand/shallow'`). | LOW | Implementation start |
