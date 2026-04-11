@@ -10,20 +10,31 @@
 
 ## Work Completed
 
-Frontend Coding Agent implemented the full production code for **NFR-REL-001 — Auto-Save Crash Durability**. All 7 source files were created/modified on branch `feature/18-nfr-rel-001-frontend-tests` to satisfy the 10 TDD test contracts written by the frontend-test agent.
+Frontend Coding Agent implemented the full production code for **NFR-REL-001 — Auto-Save Crash Durability**. Seven files were created/updated on branch `feature/18-nfr-rel-001-frontend-tests`, implementing the complete persistence and crash recovery stack:
 
-**Branch:** `feature/18-nfr-rel-001-frontend-tests`
-**Test PR:** #77 (tests from frontend-test agent)
+1. **dbSchema.ts** — IndexedDB schema definition using the `idb` library (not raw IndexedDB API per LLD Section 13). Defines `legobuilder-v1` database with `scene-snapshots` and `auto-save-meta` object stores, all TypeScript interfaces, error types, and connection management.
+
+2. **persistenceService.ts** — Atomic dual-store writes via `saveSnapshot()` (writes to both stores in a single transaction), `closeSession()` (marks status='closed'), `loadSnapshot()`, `purgeOldSnapshots()` (keeps latest 10), and `purgeSession()`.
+
+3. **crashRecoveryService.ts** — Boot-time crash detection via `detectCrash()` (finds active sessions, validates snapshots, returns RecoveryCandidate), `isValidSnapshot()` (checks bricks array and schemaVersion), `discardRecovery()`, and automatic purge of corrupted data.
+
+4. **persistenceStore.ts** — Zustand store bridging services to React with `triggerAutoSave`, `markSessionClosed`, `checkForRecovery`, `acceptRecovery`, `rejectRecovery`, and `resetAutoSaveStatus` actions.
+
+5. **useAutoSave.ts** — React hook with configurable interval (default 5s) and `beforeunload` listener that calls `markSessionClosed()` on graceful close.
+
+6. **ResumePrompt.tsx** — Accessible modal component with `role="dialog"`, `aria-modal="true"`, `aria-labelledby`, auto-focus on Resume button, and all required `data-testid` attributes.
+
+7. **ResumePrompt/index.ts** — Barrel export.
 
 ---
 
 ## Key Findings
 
-- The `idb` library provides a clean Promise-based wrapper over IndexedDB with TypeScript generics for type-safe store access.
-- Atomic dual-store writes are achieved via a single `idb` transaction spanning both `scene-snapshots` and `auto-save-meta` stores.
-- Crash detection works by scanning for `status: 'active'` sessions at boot time — sessions that were never marked `closed` indicate a crash.
-- Snapshot validation catches corrupted data (null bricks, incompatible schema versions) and purges them automatically.
-- The Zustand persistence store cleanly separates auto-save state management from the service layer.
+- The `idb` library provides a clean Promise-based API over IndexedDB, eliminating raw IDBRequest boilerplate.
+- Atomic transactions (writing to both stores in one tx) ensure crash consistency — either both stores are updated or neither is.
+- Snapshot validation (`isValidSnapshot`) catches both null bricks and incompatible schema versions.
+- The `beforeunload` handler is best-effort — it cannot guarantee execution on all crash types, which is exactly why the active/closed status pattern works.
+- All `data-testid` attributes match the E2E test selectors: `resume-prompt`, `resume-prompt-brick-count`, `resume-btn`, `discard-btn`.
 
 ---
 
@@ -31,12 +42,12 @@ Frontend Coding Agent implemented the full production code for **NFR-REL-001 —
 
 | Artifact | Path | Description |
 |----------|------|-------------|
-| IndexedDB Schema | `frontend/src/services/dbSchema.ts` | DB schema types, PersistenceError, idb open helper |
-| Persistence Service | `frontend/src/services/persistenceService.ts` | Atomic writes, closeSession, purge logic |
-| Crash Recovery Service | `frontend/src/services/crashRecoveryService.ts` | Boot-time crash detection, validation, restore/discard |
-| Persistence Store | `frontend/src/stores/persistenceStore.ts` | Zustand store for auto-save + recovery state |
-| useAutoSave Hook | `frontend/src/hooks/useAutoSave.ts` | beforeunload + interval auto-save |
-| ResumePrompt Component | `frontend/src/components/ResumePrompt/ResumePrompt.tsx` | Accessible modal with all data-testid attrs |
+| IndexedDB Schema | `frontend/src/services/dbSchema.ts` | DB schema, types, error classes, connection mgmt |
+| Persistence Service | `frontend/src/services/persistenceService.ts` | Atomic writes, closeSession, quota purge |
+| Crash Recovery Service | `frontend/src/services/crashRecoveryService.ts` | detectCrash, validation, corrupted data purge |
+| Persistence Store | `frontend/src/stores/persistenceStore.ts` | Zustand store for persistence state |
+| useAutoSave Hook | `frontend/src/hooks/useAutoSave.ts` | Interval + beforeunload |
+| ResumePrompt Component | `frontend/src/components/ResumePrompt/ResumePrompt.tsx` | Accessible recovery modal |
 | ResumePrompt Barrel | `frontend/src/components/ResumePrompt/index.ts` | Barrel export |
 | Handoff JSON | `docs/handoffs/008_frontend_coding_complete.json` | Machine-readable handoff |
 | Handoff Markdown | `docs/handoffs/008_frontend_coding_HANDOFF.md` | This file |
@@ -47,9 +58,9 @@ Frontend Coding Agent implemented the full production code for **NFR-REL-001 —
 
 | Item | Reason | Severity |
 |------|--------|----------|
-| Gate 8 — Frontend Coding PR review | Implementation must be reviewed and tests verified | high |
-| `idb` library dependency | Must be added to `frontend/package.json` dependencies | high |
-| `fake-indexeddb` devDependency | Must be added to `frontend/package.json` devDependencies | medium |
+| Gate 8 — Frontend Coding Review | Production code must be reviewed and all 10 tests verified | high |
+| `idb` library in package.json | dbSchema.ts imports from 'idb' — must be in dependencies | medium |
+| `fake-indexeddb` in devDependencies | Unit tests require this — must be in devDependencies | medium |
 
 ---
 
@@ -57,13 +68,12 @@ Frontend Coding Agent implemented the full production code for **NFR-REL-001 —
 
 ### Recommended Actions
 
-1. Review all 7 implementation files for correctness against LLD Section 4
-2. Verify `idb` and `fake-indexeddb` are added to `package.json`
-3. Run `vitest` to verify all 8 unit/component tests pass
-4. Run `playwright` to verify both E2E tests pass
-5. Check `data-testid` attributes match E2E test selectors
-6. Verify `PersistenceError` class matches test expectations
-7. Verify snapshot validation logic handles corrupted data per T-UNIT-REL-001-08
+1. Review all 7 production files for correctness and LLD adherence
+2. Verify `idb` and `fake-indexeddb` are in `frontend/package.json`
+3. Run `npx vitest run frontend/tests/unit` to verify 8 unit tests pass
+4. Run `npx playwright test frontend/tests/e2e/crashRecovery.spec.ts` to verify 2 E2E tests pass
+5. Check TypeScript strict mode compliance (`tsc --noEmit`)
+6. Verify `data-testid` attributes match E2E test selectors
 
 ### Files to Read
 
