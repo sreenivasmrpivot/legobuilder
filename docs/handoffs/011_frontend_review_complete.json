@@ -1,0 +1,121 @@
+{
+  "handoff_id": "011_frontend_review_complete",
+  "from_agent": "frontend-review",
+  "to_agent": "frontend-coding",
+  "timestamp": "2026-04-11T15:28:19Z",
+  "status": "changes_requested",
+  "app_id": "app-legobuilder-20260410",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "summary": "Gate 8 re-review (iteration 3) of PR #77 (NFR-REL-001 Auto-Save Crash Durability). All 5 prior findings (B1, B2, M1, M2, M3) verified as RESOLVED. 1 new blocking issue found: B3 — idb production dependency is missing from package.json. The production code in dbSchema.ts imports from idb but the dependency is not listed in package.json dependencies. Only fake-indexeddb and globals were added to devDependencies. The app will fail to build without idb.",
+  "workflow_state": {
+    "current_phase": "frontend_review_recheck",
+    "workflow_type": "pure_greenfield",
+    "completed_phases": ["design", "frontend_test", "frontend_coding", "frontend_review", "frontend_coding_fix", "frontend_review_recheck"],
+    "remaining_phases": ["frontend_coding_fix_2", "frontend_review_final", "release"]
+  },
+  "review_verdict": "CHANGES_REQUESTED",
+  "pr_number": 77,
+  "branch": "feature/18-nfr-rel-001-frontend-tests",
+  "prior_findings_status": {
+    "B1": "RESOLVED — useAutoSave.ts now reads actual scene state from sceneStore via useSceneStore.getState()",
+    "B2": "RESOLVED — package.json diff shows only fake-indexeddb and globals added to devDependencies, base preserved",
+    "M1": "RESOLVED — ResumePrompt.test.tsx and useAutoSave.test.ts import real production modules",
+    "M2": "RESOLVED — console.warn added to persistenceService.ts catch block",
+    "M3": "RESOLVED — console.warn added to all 4 catch blocks in persistenceStore.ts"
+  },
+  "findings": {
+    "blocking": [
+      {
+        "id": "B3",
+        "severity": "high",
+        "file": "frontend/package.json",
+        "title": "idb production dependency missing from package.json",
+        "description": "Production code in dbSchema.ts (line 14) imports from idb library: import { openDB, type IDBPDatabase, type DBSchema } from 'idb'. However, idb is not listed in package.json dependencies. Only fake-indexeddb and globals were added to devDependencies. The application will fail to build and run without this dependency.",
+        "impact": "Build failure — all 6 production modules depend on dbSchema.ts which imports idb. The entire auto-save feature is non-functional without this dependency.",
+        "fix": "Add '\"idb\": \"^8.0.0\"' to the dependencies section of frontend/package.json."
+      }
+    ],
+    "medium": [],
+    "low": [
+      {
+        "id": "L1",
+        "file": "frontend/src/services/dbSchema.ts",
+        "title": "No closeDB() for HMR cleanup alongside resetDBPromise()"
+      },
+      {
+        "id": "L2",
+        "file": "frontend/src/hooks/useAutoSave.ts",
+        "title": "markSessionClosed is async in sync beforeunload — consider localStorage fallback"
+      },
+      {
+        "id": "L3",
+        "file": "frontend/src/components/ResumePrompt/ResumePrompt.tsx",
+        "title": "No focus trap in modal — track as separate WCAG accessibility issue"
+      },
+      {
+        "id": "L4",
+        "file": "frontend/src/services/persistenceService.ts",
+        "title": "purgeSession() uses raw IDBKeyRange.only() — inconsistent with idb wrapper usage"
+      },
+      {
+        "id": "L5",
+        "file": "frontend/src/services/persistenceService.ts",
+        "title": "existingMeta read is outside the atomic transaction (TOCTOU on saveCount)"
+      }
+    ]
+  },
+  "passing_checks": [
+    "B1 RESOLVED: useAutoSave reads actual scene state from sceneStore",
+    "B2 RESOLVED: package.json reverted to base, only devDeps added",
+    "M1 RESOLVED: ResumePrompt.test.tsx and useAutoSave.test.ts import real production modules",
+    "M2 RESOLVED: console.warn in persistenceService.ts catch block",
+    "M3 RESOLVED: console.warn in all 4 persistenceStore.ts catch blocks",
+    "idb library used (not raw IndexedDB) per LLD Section 13",
+    "Atomic dual-store transaction in saveSnapshot()",
+    "PersistenceError class with typed error codes",
+    "isValidSnapshot() validates bricks array + schemaVersion bounds",
+    "data-testid attributes match E2E selectors",
+    "Accessible modal (role=dialog, aria-modal=true, aria-labelledby)",
+    "beforeunload listener registered and cleaned up on unmount",
+    "Overlap guard (isSavingRef) prevents concurrent saves",
+    "fake-indexeddb in devDependencies",
+    "All 10 test IDs from LLD Section 12 covered",
+    "Clean module layering across 6 modules",
+    "Singleton DB pattern with resetDBPromise()"
+  ],
+  "test_alignment": {
+    "T-BE-REL-001-01": "pass_after_b1_fix",
+    "T-BE-REL-001-02": "pass_after_b1_fix",
+    "T-UNIT-REL-001-01": "pass",
+    "T-UNIT-REL-001-02": "pass",
+    "T-UNIT-REL-001-03": "pass",
+    "T-UNIT-REL-001-04": "pass",
+    "T-UNIT-REL-001-05": "pass_real_import",
+    "T-UNIT-REL-001-06": "pass_real_import",
+    "T-UNIT-REL-001-07": "pass",
+    "T-UNIT-REL-001-08": "pass"
+  },
+  "human_review_required": [
+    {
+      "item": "Gate 8 — Confirm B3 fix (idb added to package.json dependencies)",
+      "severity": "high"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Fix B3: Add '\"idb\": \"^8.0.0\"' to the dependencies section of frontend/package.json",
+      "This is a one-line fix — no other changes needed",
+      "All prior findings (B1, B2, M1, M2, M3) are resolved and should not be modified"
+    ],
+    "files_to_modify": [
+      "frontend/package.json"
+    ]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-012"],
+    "forward_pass_score": 0.97,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
