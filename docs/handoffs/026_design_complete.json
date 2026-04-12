@@ -1,0 +1,75 @@
+{
+  "handoff_id": "026_design_complete",
+  "from_agent": "design-agent",
+  "to_agent": "gate-6a-design-review",
+  "timestamp": "2026-04-12T21:58:57Z",
+  "status": "complete",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "app_id": "app-legobuilder-20260410",
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "issue_number": 88,
+    "fr_id": "BUG-88",
+    "area": "frontend"
+  },
+  "artifacts": [
+    {
+      "name": "low-level-design",
+      "path": "docs/features/BUG-88/LOW_LEVEL_DESIGN.md",
+      "type": "design",
+      "description": "Full LLD for BUG-88: root cause analysis, wiring diagrams, sequence diagrams, fix specifications, error handling, security, performance, and 14-test regression plan"
+    },
+    {
+      "name": "design-pr",
+      "path": "feature/88-interactive-elements-wiring-design",
+      "type": "pull-request",
+      "description": "Draft PR for human design review (Gate 6a)"
+    }
+  ],
+  "summary": "Produced LLD for BUG-88 — all interactive elements non-functional. Root cause: systemic event handler wiring gaps across 5 components. Fixes: mount 3 missing hooks in App.tsx, wire onClick handlers in Toolbar/BrickPalette, wire pointer events in Viewport, add onBrickClick to BrickInstances, fix OrbitControls event capture. No engine/store/service changes needed. 14 regression tests defined.",
+  "human_review_required": [
+    {
+      "item": "OrbitControls makeDefault={false} decision",
+      "reason": "Changing this may affect camera UX — verify right-click orbit still works as expected after fix",
+      "severity": "medium"
+    },
+    {
+      "item": "e.stopPropagation() in BrickInstances onClick",
+      "reason": "Verify this doesn't break any other event listeners on parent elements",
+      "severity": "low"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read docs/features/BUG-88/LOW_LEVEL_DESIGN.md in full before writing any code",
+      "Follow the Implementation Order in Section 11 (CSS → BrickPalette → Toolbar → App → BrickInstances → Viewport)",
+      "Start with index.css audit — if pointer-events:none is found, fix it first",
+      "Use useCallback for all event handlers returned from hooks (Section 9.1)",
+      "Add regression tests in frontend/tests/regression/bug88-interactive-elements.test.ts",
+      "Verify OrbitControls fix with manual testing: right-click should orbit, left-click should place bricks",
+      "Run full test suite after each step to catch regressions early"
+    ],
+    "files_to_read": [
+      "docs/features/BUG-88/LOW_LEVEL_DESIGN.md",
+      "frontend/src/components/App.tsx",
+      "frontend/src/components/viewport/Viewport.tsx",
+      "frontend/src/components/ui/Toolbar.tsx",
+      "frontend/src/components/ui/BrickPalette.tsx",
+      "frontend/src/components/viewport/BrickInstances.tsx",
+      "frontend/src/hooks/useKeyboardShortcuts.ts",
+      "frontend/src/index.css"
+    ]
+  },
+  "workflow_state": {
+    "workflow_type": "pure_greenfield",
+    "current_phase": "design",
+    "completed_phases": ["researcher", "pm", "architecture", "design"],
+    "remaining_phases": ["gate-6a-design-review", "frontend-test", "frontend-coding", "frontend-review", "release"]
+  },
+  "git": {
+    "branch": "feature/88-interactive-elements-wiring-design",
+    "base": "main",
+    "pr_title": "[area:docs] BUG-88: Low-Level Design — Interactive Elements Wiring Fix (#88)"
+  }
+}
