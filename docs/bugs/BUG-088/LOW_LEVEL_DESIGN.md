@@ -1,253 +1,161 @@
 # Low-Level Design: BUG-088 — All Interactive Elements Non-Functional
 
-**Issue:** [#88](https://github.com/sreenivasmrpivot/legobuilder/issues/88)  
-**FR-ID:** BUG  
-**Area:** Frontend  
+**Issue:** #88  
+**FR-ID:** BUG-088  
+**Type:** Bug Fix  
 **Priority:** Critical  
-**Date:** 2026-04-12  
+**Area:** Frontend  
 **Status:** Draft — Pending Design Review (Gate 6a)
 
 ---
 
-## 1. Bug Summary
+## 1. Executive Summary
 
-The LegoBuilder application renders its full UI (3D canvas, toolbar, brick palette, ground grid) but **all interactive elements are completely non-functional**. No pointer events (click, drag, hover), keyboard shortcuts, or toolbar button presses produce any response. The root cause is a systemic **event-handler wiring failure** across multiple integration points between React components, R3F (React Three Fiber) canvas events, Zustand stores, and custom hooks.
+The LegoBuilder application renders its 3D canvas, toolbar, and brick palette visually but **all user interactions are completely non-functional**. No bricks can be placed, selected, moved, or deleted. Toolbar buttons and palette selectors produce zero response. Keyboard shortcuts are inert.
+
+Root cause analysis (from issue #88) points to **integration wiring failures** — the hooks, event handlers, and store subscriptions exist in the codebase but are not connected to the component tree or DOM events. This LLD defines the precise wiring changes required across six categories of disconnection.
 
 ---
 
-## 2. Root Cause Analysis
+## 2. Root Cause Classification
 
-Based on the codebase structure and issue analysis, there are **six distinct wiring failures** that collectively produce the observed symptom. Each is independently broken; all must be fixed together.
-
-### 2.1 Root Cause Map
-
-```
-User Interaction
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  FAILURE LAYER 1: CSS pointer-events / z-index overlay          │
-│  index.css or ViewportCanvas wrapper div may have               │
-│  pointer-events:none or an invisible overlay blocking events     │
-└─────────────────────────────────────────────────────────────────┘
-      │ (if CSS is OK, events reach R3F canvas)
-      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  FAILURE LAYER 2: useBrickPlacement hook not mounted            │
-│  App.tsx / Viewport.tsx does not call useBrickPlacement()       │
-│  → onPointerDown/Move/Up handlers never registered on canvas    │
-└─────────────────────────────────────────────────────────────────┘
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  FAILURE LAYER 3: useKeyboardShortcuts hook not mounted         │
-│  App.tsx does not call useKeyboardShortcuts()                   │
-│  → window keydown listener never attached                       │
-└─────────────────────────────────────────────────────────────────┘
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  FAILURE LAYER 4: BrickPalette onClick not wired to uiStore     │
-│  BrickPalette.tsx renders items but onClick does not call       │
-│  uiStore.setActiveBrickType() / setActiveBrickColor()           │
-└─────────────────────────────────────────────────────────────────┘
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  FAILURE LAYER 5: Toolbar onClick handlers are no-ops           │
-│  Toolbar.tsx buttons have placeholder/empty onClick props       │
-│  → historyStore.undo/redo, sceneStore.clearScene never called   │
-└─────────────────────────────────────────────────────────────────┘
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  FAILURE LAYER 6: BrickInstances click not wired to selection   │
-│  BrickInstances.tsx InstancedMesh onClick does not call         │
-│  selectionManager.selectBrick() / selectionStore.setSelected()  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 2.2 Detailed Root Causes
-
-| ID | Component / File | Failure | Impact |
-|----|-----------------|---------|--------|
-| RC-1 | `frontend/src/index.css` | `pointer-events: none` on canvas container or invisible overlay div with higher z-index intercepts all pointer events | All mouse/touch interactions blocked at CSS level |
-| RC-2 | `frontend/src/components/App.tsx` | `useBrickPlacement()` hook not called; return value (event handlers) not spread onto `<Viewport>` or `<Canvas>` | Brick placement and hover preview never triggered |
-| RC-3 | `frontend/src/components/App.tsx` | `useKeyboardShortcuts()` hook not called | R, Delete, Escape, Ctrl+Z/Y shortcuts never fire |
-| RC-4 | `frontend/src/components/ui/BrickPalette.tsx` | Brick type and color items rendered without `onClick` handlers calling `uiStore.setActiveBrickType()` / `setActiveBrickColor()` | Palette selection has no effect on active tool state |
-| RC-5 | `frontend/src/components/ui/Toolbar.tsx` | Undo/Redo/Clear/Export buttons have empty or placeholder `onClick` props | Toolbar actions never invoke store methods |
-| RC-6 | `frontend/src/components/viewport/BrickInstances.tsx` | `InstancedMesh` `onClick` not wired to `selectionManager.selectBrick()` | Clicking placed bricks never selects them |
+| ID | Category | Affected Files | Severity |
+|----|----------|---------------|----------|
+| RC-01 | Viewport pointer events not wired to placement/selection engines | `Viewport.tsx`, `ViewportCanvas.tsx` | Critical |
+| RC-02 | `useBrickPlacement` hook not mounted or return values not spread onto canvas | `Viewport.tsx`, `useBrickPlacement.ts` | Critical |
+| RC-03 | `useKeyboardShortcuts` hook not mounted in component tree | `App.tsx`, `useKeyboardShortcuts.ts` | High |
+| RC-04 | `BrickPalette.tsx` onClick handlers not connected to `uiStore`/`sceneStore` | `BrickPalette.tsx`, `uiStore.ts` | High |
+| RC-05 | `Toolbar.tsx` onClick handlers are no-ops or missing | `Toolbar.tsx`, `historyStore.ts`, `sceneStore.ts` | High |
+| RC-06 | CSS `pointer-events: none` or z-index overlay blocking all pointer events | `index.css`, layout wrappers | Medium |
 
 ---
 
 ## 3. Component Architecture
 
-### 3.1 Current (Broken) Wiring
+### 3.1 Current (Broken) Wiring Diagram
 
 ```
 App.tsx
-  ├── <Viewport>          ← useBrickPlacement NOT called here
-  │     ├── <ViewportCanvas>
-  │     │     └── <Canvas>  ← pointer events reach canvas but no handlers
-  │     │           ├── <BrickInstances>  ← onClick not wired
-  │     │           ├── <GroundGrid>      ← onPointerDown not wired
-  │     │           └── <Baseplate>
-  │     └── (no hook mounting)
-  ├── <Toolbar>           ← onClick handlers are no-ops
-  ├── <BrickPalette>      ← onClick handlers missing
-  └── (useKeyboardShortcuts NOT called)
+├── Toolbar.tsx          ← buttons render but onClick = undefined / no-op
+├── BrickPalette.tsx     ← items render but onClick = undefined / no-op
+└── Viewport.tsx
+    └── ViewportCanvas.tsx (R3F <Canvas>)
+        ├── GroundGrid.tsx    ← no onPointerDown/Move/Up handlers
+        ├── Baseplate.tsx     ← no pointer events
+        └── BrickInstances.tsx ← no click handler for selection
+
+Hooks (UNMOUNTED / DISCONNECTED):
+  useBrickPlacement.ts  ← defined but not called in Viewport
+  useSelection.ts       ← defined but not called in Viewport
+  useKeyboardShortcuts.ts ← defined but not called in App
+  useUndoRedo.ts        ← defined but not connected to Toolbar
 ```
 
-### 3.2 Target (Fixed) Wiring
+### 3.2 Target (Fixed) Wiring Diagram
 
 ```
 App.tsx
-  ├── useKeyboardShortcuts()   ← MOUNT HERE (window-level listener)
-  ├── useUndoRedo()            ← expose undo/redo to Toolbar
-  ├── <Viewport
-  │     onPointerDown={placementHandlers.onPointerDown}
-  │     onPointerMove={placementHandlers.onPointerMove}
-  │     onPointerUp={placementHandlers.onPointerUp}>
-  │     ├── <ViewportCanvas>   ← pass pointer event props through
-  │     │     └── <Canvas
-  │     │           onPointerDown={...}
-  │     │           onPointerMove={...}
-  │     │           onPointerUp={...}>
-  │     │           ├── <BrickInstances
-  │     │           │     onClick={selectionHandlers.onBrickClick}/>
-  │     │           ├── <GroundGrid
-  │     │           │     onPointerDown={placementHandlers.onGroundClick}/>
-  │     │           └── <Baseplate>
-  │     └── (useBrickPlacement mounted inside Viewport)
-  ├── <Toolbar
-  │     onUndo={historyStore.undo}
-  │     onRedo={historyStore.redo}
-  │     onClear={sceneStore.clearScene}
-  │     onExport={exportService.exportJSON}/>
-  └── <BrickPalette
-        onSelectType={uiStore.setActiveBrickType}
-        onSelectColor={uiStore.setActiveBrickColor}/>
+├── useKeyboardShortcuts()   ← MOUNT HERE (window-level keyboard events)
+├── Toolbar.tsx
+│   ├── onUndo  → historyStore.undo()
+│   ├── onRedo  → historyStore.redo()
+│   ├── onClear → sceneStore.clearScene()
+│   └── onExport → exportService.exportJSON()
+├── BrickPalette.tsx
+│   ├── onSelectType(type) → uiStore.setActiveBrickType(type)
+│   └── onSelectColor(color) → uiStore.setActiveBrickColor(color)
+└── Viewport.tsx
+    ├── useBrickPlacement()  ← MOUNT HERE, spread handlers onto canvas
+    ├── useSelection()       ← MOUNT HERE, pass handleClick to BrickInstances
+    └── ViewportCanvas.tsx
+        ├── onPointerDown → placementEngine.handlePointerDown()
+        ├── onPointerMove → placementEngine.handlePointerMove() (ghost brick)
+        ├── onPointerUp   → placementEngine.handlePointerUp()
+        ├── GroundGrid.tsx
+        │   └── onPointerDown → placementEngine.placeAtGridPosition()
+        ├── Baseplate.tsx
+        │   └── onPointerDown → placementEngine.placeAtGridPosition()
+        └── BrickInstances.tsx
+            └── onClick(instanceId) → selectionManager.selectBrick(instanceId)
 ```
 
 ---
 
-## 4. Module-Level Fix Specifications
+## 4. Detailed Fix Specifications
 
-### 4.1 `frontend/src/components/App.tsx`
+### 4.1 RC-01 & RC-02 — Viewport Pointer Event Wiring
 
-**Problem:** Missing hook mounts; child components receive no event wiring.  
+**File:** `frontend/src/components/viewport/Viewport.tsx`
+
+**Problem:** `useBrickPlacement` and `useSelection` hooks are not called inside `Viewport`. The R3F `<Canvas>` (or its wrapper) does not receive `onPointerDown`, `onPointerMove`, `onPointerUp` event props.
+
 **Fix:**
 
 ```typescript
-// BEFORE (broken)
-export function App() {
-  return (
-    <div className="app-container">
-      <Toolbar />
-      <Viewport />
-      <BrickPalette />
-    </div>
-  );
-}
-
-// AFTER (fixed)
-export function App() {
-  // Mount global hooks
-  useKeyboardShortcuts();          // RC-3 fix: attaches window keydown listener
-  const { undo, redo } = useUndoRedo();
-  const placementHandlers = useBrickPlacement(); // RC-2 fix: returns pointer handlers
-
-  return (
-    <div className="app-container">
-      <Toolbar
-        onUndo={undo}              // RC-5 fix
-        onRedo={redo}
-        onClear={sceneStore.getState().clearScene}
-        onExport={exportService.exportJSON}
-      />
-      <Viewport
-        placementHandlers={placementHandlers}  // RC-2 fix: pass handlers down
-      />
-      <BrickPalette
-        onSelectType={uiStore.getState().setActiveBrickType}   // RC-4 fix
-        onSelectColor={uiStore.getState().setActiveBrickColor}
-      />
-    </div>
-  );
-}
-```
-
-**Interface changes:**
-- `Viewport` receives `placementHandlers: PlacementHandlers` prop
-- `Toolbar` receives `onUndo`, `onRedo`, `onClear`, `onExport` props
-- `BrickPalette` receives `onSelectType`, `onSelectColor` props
-
----
-
-### 4.2 `frontend/src/components/viewport/Viewport.tsx`
-
-**Problem:** Pointer event handlers from `useBrickPlacement` are not spread onto the R3F `<Canvas>` or its children.  
-**Fix:**
-
-```typescript
-// BEFORE (broken)
+// Viewport.tsx — BEFORE (broken)
 export function Viewport() {
   return (
     <ViewportCanvas>
-      <BrickInstances />
       <GroundGrid />
+      <BrickInstances />
     </ViewportCanvas>
   );
 }
 
-// AFTER (fixed)
-interface ViewportProps {
-  placementHandlers: PlacementHandlers;
-}
-
-export function Viewport({ placementHandlers }: ViewportProps) {
-  const selectionHandlers = useSelection(); // RC-6 fix: mount selection hook
+// Viewport.tsx — AFTER (fixed)
+export function Viewport() {
+  const { onPointerDown, onPointerMove, onPointerUp } = useBrickPlacement();
+  const { handleBrickClick } = useSelection();
 
   return (
     <ViewportCanvas
-      onPointerDown={placementHandlers.onPointerDown}   // RC-2 fix
-      onPointerMove={placementHandlers.onPointerMove}
-      onPointerUp={placementHandlers.onPointerUp}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
     >
-      <BrickInstances
-        onBrickClick={selectionHandlers.onBrickClick}   // RC-6 fix
-      />
-      <GroundGrid
-        onPointerDown={placementHandlers.onGroundPointerDown}
-      />
+      <GroundGrid onPointerDown={onPointerDown} />
+      <BrickInstances onBrickClick={handleBrickClick} />
     </ViewportCanvas>
   );
 }
 ```
 
----
-
-### 4.3 `frontend/src/components/viewport/ViewportCanvas.tsx`
-
-**Problem:** The R3F `<Canvas>` wrapper does not forward pointer event props.  
-**Fix:**
+**Interface contract for `useBrickPlacement`:**
 
 ```typescript
-// BEFORE (broken)
-export function ViewportCanvas({ children }: { children: ReactNode }) {
-  return (
-    <Canvas camera={{ position: [10, 10, 10] }}>
-      {children}
-    </Canvas>
-  );
+interface BrickPlacementHandlers {
+  onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  onPointerMove: (event: ThreeEvent<PointerEvent>) => void;
+  onPointerUp:   (event: ThreeEvent<PointerEvent>) => void;
 }
 
-// AFTER (fixed)
+function useBrickPlacement(): BrickPlacementHandlers
+```
+
+**Interface contract for `useSelection`:**
+
+```typescript
+interface SelectionHandlers {
+  handleBrickClick: (instanceId: string, event: ThreeEvent<MouseEvent>) => void;
+}
+
+function useSelection(): SelectionHandlers
+```
+
+### 4.2 RC-01 — ViewportCanvas Event Passthrough
+
+**File:** `frontend/src/components/viewport/ViewportCanvas.tsx`
+
+**Problem:** The R3F `<Canvas>` wrapper may not be forwarding pointer event props to the underlying canvas DOM element.
+
+**Fix:** Accept and spread pointer event props:
+
+```typescript
 interface ViewportCanvasProps {
-  children: ReactNode;
-  onPointerDown?: (e: ThreeEvent<PointerEvent>) => void;
-  onPointerMove?: (e: ThreeEvent<PointerEvent>) => void;
-  onPointerUp?: (e: ThreeEvent<PointerEvent>) => void;
+  children: React.ReactNode;
+  onPointerDown?: (event: ThreeEvent<PointerEvent>) => void;
+  onPointerMove?: (event: ThreeEvent<PointerEvent>) => void;
+  onPointerUp?:   (event: ThreeEvent<PointerEvent>) => void;
 }
 
 export function ViewportCanvas({
@@ -257,130 +165,112 @@ export function ViewportCanvas({
   onPointerUp,
 }: ViewportCanvasProps) {
   return (
-    // RC-1 fix: ensure no pointer-events:none on wrapper div
-    <div style={{ width: '100%', height: '100%', pointerEvents: 'auto' }}>
-      <Canvas
-        camera={{ position: [10, 10, 10] }}
-        onPointerDown={onPointerDown}   // RC-2 fix: forward to Canvas
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-      >
-        {children}
-      </Canvas>
-    </div>
+    <Canvas
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      style={{ width: '100%', height: '100%' }}
+    >
+      {children}
+    </Canvas>
   );
 }
 ```
 
-**CSS fix in `index.css`:**
-```css
-/* REMOVE or CORRECT any rule like: */
-/* .canvas-container { pointer-events: none; }  ← DELETE THIS */
-/* canvas { pointer-events: none; }             ← DELETE THIS */
+**CSS guard** — ensure the canvas container has no `pointer-events: none`:
 
-/* ENSURE: */
-.app-container {
+```css
+/* index.css — ensure canvas wrapper is interactive */
+.viewport-container {
   pointer-events: auto;
   position: relative;
   z-index: 0;
 }
-
-.viewport-wrapper {
-  pointer-events: auto;
-  position: relative;
-}
 ```
 
----
+### 4.3 RC-03 — Keyboard Shortcuts Hook Mount
 
-### 4.4 `frontend/src/components/viewport/BrickInstances.tsx`
+**File:** `frontend/src/components/App.tsx`
 
-**Problem:** `InstancedMesh` `onClick` not wired to selection logic.  
+**Problem:** `useKeyboardShortcuts` is defined but never called in the component tree, so no `keydown` event listeners are registered on `window`.
+
 **Fix:**
 
 ```typescript
-// BEFORE (broken)
-export function BrickInstances() {
-  // ... renders InstancedMesh with no onClick
-  return <instancedMesh ref={meshRef} args={[geometry, material, count]} />;
-}
-
-// AFTER (fixed)
-interface BrickInstancesProps {
-  onBrickClick: (instanceId: number) => void;  // RC-6 fix
-}
-
-export function BrickInstances({ onBrickClick }: BrickInstancesProps) {
+// App.tsx — BEFORE (broken)
+export function App() {
   return (
-    <instancedMesh
-      ref={meshRef}
-      args={[geometry, material, count]}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (e.instanceId !== undefined) {
-          onBrickClick(e.instanceId);  // RC-6 fix: wire to selection
-        }
-      }}
-    />
-  );
-}
-```
-
----
-
-### 4.5 `frontend/src/components/ui/BrickPalette.tsx`
-
-**Problem:** Brick type and color items rendered without `onClick` handlers.  
-**Fix:**
-
-```typescript
-// BEFORE (broken)
-export function BrickPalette() {
-  return (
-    <div className="brick-palette">
-      {BRICK_TYPES.map(type => (
-        <div key={type.id} className="brick-type-item">
-          {type.label}
-        </div>  // ← no onClick
-      ))}
+    <div className="app-layout">
+      <Toolbar />
+      <BrickPalette />
+      <Viewport />
     </div>
   );
 }
 
-// AFTER (fixed)
-interface BrickPaletteProps {
-  onSelectType: (typeId: string) => void;   // RC-4 fix
-  onSelectColor: (color: string) => void;
-}
+// App.tsx — AFTER (fixed)
+export function App() {
+  useKeyboardShortcuts(); // ← ADD THIS LINE
 
-export function BrickPalette({ onSelectType, onSelectColor }: BrickPaletteProps) {
-  const { activeBrickType, activeBrickColor } = useUiStore();
+  return (
+    <div className="app-layout">
+      <Toolbar />
+      <BrickPalette />
+      <Viewport />
+    </div>
+  );
+}
+```
+
+**`useKeyboardShortcuts` must implement:**
+
+```typescript
+function useKeyboardShortcuts(): void {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'r' || e.key === 'R')         → sceneStore.rotateSelected(90)
+      if (e.key === 'Delete')                      → selectionStore.deleteSelected()
+      if (e.key === 'Escape')                      → selectionStore.clearSelection()
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') → historyStore.undo()
+      if ((e.ctrlKey || e.metaKey) && e.key === 'y') → historyStore.redo()
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+}
+```
+
+### 4.4 RC-04 — BrickPalette Store Connection
+
+**File:** `frontend/src/components/ui/BrickPalette.tsx`
+
+**Problem:** Brick type and color items render but their `onClick` handlers do not call `uiStore.setActiveBrickType()` or `uiStore.setActiveBrickColor()`.
+
+**Fix:**
+
+```typescript
+// BrickPalette.tsx — AFTER (fixed)
+export function BrickPalette() {
+  const { activeBrickType, activeBrickColor, setActiveBrickType, setActiveBrickColor }
+    = useUiStore();
 
   return (
     <div className="brick-palette">
-      {BRICK_TYPES.map(type => (
-        <div
+      {BRICK_TYPES.map((type) => (
+        <button
           key={type.id}
-          className={`brick-type-item ${
-            activeBrickType === type.id ? 'selected' : ''
-          }`}
-          onClick={() => onSelectType(type.id)}  // RC-4 fix
-          role="button"
-          tabIndex={0}
+          className={`brick-type-btn ${activeBrickType === type.id ? 'active' : ''}`}
+          onClick={() => setActiveBrickType(type.id)}  // ← WIRE THIS
         >
           {type.label}
-        </div>
+        </button>
       ))}
-      {BRICK_COLORS.map(color => (
-        <div
-          key={color}
-          className={`color-swatch ${
-            activeBrickColor === color ? 'selected' : ''
-          }`}
-          style={{ backgroundColor: color }}
-          onClick={() => onSelectColor(color)}   // RC-4 fix
-          role="button"
-          tabIndex={0}
+      {BRICK_COLORS.map((color) => (
+        <button
+          key={color.hex}
+          className={`color-swatch ${activeBrickColor === color.hex ? 'active' : ''}`}
+          style={{ backgroundColor: color.hex }}
+          onClick={() => setActiveBrickColor(color.hex)}  // ← WIRE THIS
         />
       ))}
     </div>
@@ -388,200 +278,184 @@ export function BrickPalette({ onSelectType, onSelectColor }: BrickPaletteProps)
 }
 ```
 
----
+**`uiStore` must expose:**
 
-### 4.6 `frontend/src/components/ui/Toolbar.tsx`
+```typescript
+interface UIStore {
+  activeBrickType: string;
+  activeBrickColor: string;
+  setActiveBrickType: (type: string) => void;
+  setActiveBrickColor: (color: string) => void;
+}
+```
 
-**Problem:** Buttons have empty/placeholder `onClick` props.  
+### 4.5 RC-05 — Toolbar Store Connection
+
+**File:** `frontend/src/components/ui/Toolbar.tsx`
+
+**Problem:** Toolbar buttons render but `onClick` handlers are either missing, undefined, or reference placeholder no-op functions.
+
 **Fix:**
 
 ```typescript
-// BEFORE (broken)
+// Toolbar.tsx — AFTER (fixed)
 export function Toolbar() {
-  return (
-    <div className="toolbar">
-      <button onClick={() => {}}>Undo</button>   // ← no-op
-      <button onClick={() => {}}>Redo</button>
-      <button onClick={() => {}}>Clear</button>
-      <button onClick={() => {}}>Export</button>
-    </div>
-  );
-}
-
-// AFTER (fixed)
-interface ToolbarProps {
-  onUndo: () => void;    // RC-5 fix
-  onRedo: () => void;
-  onClear: () => void;
-  onExport: () => void;
-}
-
-export function Toolbar({ onUndo, onRedo, onClear, onExport }: ToolbarProps) {
-  const { canUndo, canRedo } = useHistoryStore();
+  const { undo, redo, canUndo, canRedo } = useHistoryStore();
+  const { clearScene } = useSceneStore();
+  const { exportJSON } = useExportService();
 
   return (
     <div className="toolbar">
-      <button onClick={onUndo} disabled={!canUndo}>Undo</button>
-      <button onClick={onRedo} disabled={!canRedo}>Redo</button>
-      <button onClick={onClear}>Clear</button>
-      <button onClick={onExport}>Export</button>
+      <button onClick={undo}   disabled={!canUndo}>Undo</button>    // ← WIRE
+      <button onClick={redo}   disabled={!canRedo}>Redo</button>    // ← WIRE
+      <button onClick={clearScene}>Clear</button>                   // ← WIRE
+      <button onClick={exportJSON}>Export</button>                  // ← WIRE
     </div>
   );
 }
 ```
 
----
-
-### 4.7 `frontend/src/hooks/useBrickPlacement.ts`
-
-**Problem:** Hook exists but may not return the correct handler shape expected by Viewport.  
-**Fix — ensure the hook returns a `PlacementHandlers` interface:**
+**`historyStore` must expose:**
 
 ```typescript
-export interface PlacementHandlers {
-  onPointerDown: (e: ThreeEvent<PointerEvent>) => void;
-  onPointerMove: (e: ThreeEvent<PointerEvent>) => void;
-  onPointerUp: (e: ThreeEvent<PointerEvent>) => void;
-  onGroundPointerDown: (e: ThreeEvent<PointerEvent>) => void;
+interface HistoryStore {
+  undo: () => void;
+  redo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
 }
+```
 
-export function useBrickPlacement(): PlacementHandlers {
-  const { activeBrickType, activeBrickColor } = useUiStore();
-  const { addBrick } = useSceneStore();
-  const { pushCommand } = useHistoryStore();
+### 4.6 RC-06 — CSS Pointer-Events Audit
 
-  const onGroundPointerDown = useCallback((e: ThreeEvent<PointerEvent>) => {
-    e.stopPropagation();
-    const snappedPosition = snapToGrid(e.point);
-    const command = new PlaceBrickCommand({
-      type: activeBrickType,
-      color: activeBrickColor,
-      position: snappedPosition,
-      rotation: 0,
-    });
-    pushCommand(command);  // records in history
-    command.execute(addBrick);
-  }, [activeBrickType, activeBrickColor, addBrick, pushCommand]);
+**File:** `frontend/src/index.css` and all layout wrapper components
 
-  const onPointerMove = useCallback((e: ThreeEvent<PointerEvent>) => {
-    // Update ghost/preview brick position in uiStore
-    const snappedPosition = snapToGrid(e.point);
-    useUiStore.getState().setPreviewPosition(snappedPosition);
-  }, []);
+**Problem:** An invisible overlay div or `pointer-events: none` on the canvas container may intercept all pointer events before they reach interactive elements.
 
-  return {
-    onPointerDown: () => {},  // canvas-level; ground handles placement
-    onPointerMove,
-    onPointerUp: () => {},
-    onGroundPointerDown,
-  };
-}
+**Audit checklist:**
+
+```css
+/* FORBIDDEN patterns — remove if found */
+.viewport-container { pointer-events: none; }  /* blocks all canvas events */
+.app-overlay        { pointer-events: all; z-index: 9999; }  /* intercepts events */
+
+/* REQUIRED patterns */
+.viewport-container { pointer-events: auto; }
+.canvas-wrapper     { pointer-events: auto; }
+.ui-overlay         { pointer-events: none; }  /* UI overlays must pass through */
+.ui-overlay button  { pointer-events: auto; }  /* but interactive elements must receive */
 ```
 
 ---
 
-### 4.8 `frontend/src/hooks/useKeyboardShortcuts.ts`
+## 5. Data Models
 
-**Problem:** Hook defined but not called in `App.tsx`.  
-**Fix — ensure hook is called in `App.tsx` (no code change to the hook itself needed if logic is correct):**
+No new data models are introduced. This bug fix only wires existing stores and hooks. The relevant store interfaces are documented for completeness:
+
+### 5.1 UIStore (uiStore.ts)
 
 ```typescript
-// Verify hook attaches to window correctly:
-export function useKeyboardShortcuts() {
-  const { undo, redo } = useHistoryStore();
-  const { removeSelected } = useSceneStore();
-  const { clearSelection } = useSelectionStore();
-  const { rotatePreview } = useUiStore();
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'z' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); undo(); }
-      if (e.key === 'y' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); redo(); }
-      if (e.key === 'Z' && (e.ctrlKey || e.metaKey) && e.shiftKey) { e.preventDefault(); redo(); }
-      if (e.key === 'Delete' || e.key === 'Backspace') { removeSelected(); }
-      if (e.key === 'Escape') { clearSelection(); }
-      if (e.key === 'r' || e.key === 'R') { rotatePreview(); }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [undo, redo, removeSelected, clearSelection, rotatePreview]);
+interface UIState {
+  activeBrickType: string;          // e.g. '1x1', '2x2', '2x4'
+  activeBrickColor: string;         // hex color string e.g. '#FF0000'
+  activeTool: 'place' | 'select' | 'delete';
+  setActiveBrickType: (type: string) => void;
+  setActiveBrickColor: (color: string) => void;
+  setActiveTool: (tool: UIState['activeTool']) => void;
 }
+```
+
+### 5.2 SceneStore (sceneStore.ts)
+
+```typescript
+interface SceneState {
+  bricks: Brick[];
+  addBrick: (brick: Brick) => void;
+  removeBrick: (id: string) => void;
+  clearScene: () => void;
+  rotateSelected: (degrees: number) => void;
+}
+
+interface Brick {
+  id: string;
+  type: string;
+  color: string;
+  position: [number, number, number];
+  rotation: number;  // degrees, multiples of 90
+}
+```
+
+### 5.3 SelectionStore (selectionStore.ts)
+
+```typescript
+interface SelectionState {
+  selectedBrickId: string | null;
+  selectBrick: (id: string) => void;
+  clearSelection: () => void;
+  deleteSelected: () => void;
+}
+```
+
+### 5.4 HistoryStore (historyStore.ts)
+
+```typescript
+interface HistoryState {
+  past: SceneSnapshot[];
+  future: SceneSnapshot[];
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
+  pushSnapshot: (snapshot: SceneSnapshot) => void;
+}
+
+type SceneSnapshot = Brick[];
 ```
 
 ---
 
-### 4.9 `frontend/src/hooks/useSelection.ts`
+## 6. Sequence Diagrams
 
-**Problem:** Hook exists but not mounted in `Viewport.tsx`; return value not passed to `BrickInstances`.  
-**Fix — ensure hook is called in `Viewport.tsx` and returns `onBrickClick`:**
-
-```typescript
-export interface SelectionHandlers {
-  onBrickClick: (instanceId: number) => void;
-}
-
-export function useSelection(): SelectionHandlers {
-  const { bricks } = useSceneStore();
-  const { setSelected, clearSelection } = useSelectionStore();
-
-  const onBrickClick = useCallback((instanceId: number) => {
-    const brick = bricks[instanceId];
-    if (brick) {
-      setSelected(brick.id);
-    } else {
-      clearSelection();
-    }
-  }, [bricks, setSelected, clearSelection]);
-
-  return { onBrickClick };
-}
-```
-
----
-
-## 5. Data Flow & Sequence Diagrams
-
-### 5.1 Brick Placement Flow (Fixed)
+### 6.1 Brick Placement Flow (Fixed)
 
 ```mermaid
 sequenceDiagram
     participant User
     participant GroundGrid
+    participant Viewport
     participant useBrickPlacement
     participant placementEngine
-    participant historyStore
     participant sceneStore
-    participant BrickInstances
+    participant historyStore
 
     User->>GroundGrid: onPointerDown (click on grid)
-    GroundGrid->>useBrickPlacement: onGroundPointerDown(ThreeEvent)
-    useBrickPlacement->>placementEngine: snapToGrid(event.point)
-    placementEngine-->>useBrickPlacement: snappedPosition: Vector3
-    useBrickPlacement->>historyStore: pushCommand(PlaceBrickCommand)
-    historyStore->>sceneStore: addBrick({ type, color, position, rotation })
-    sceneStore-->>BrickInstances: state update triggers re-render
-    BrickInstances-->>User: New brick appears at snapped position
+    GroundGrid->>Viewport: propagates ThreeEvent
+    Viewport->>useBrickPlacement: onPointerDown(event)
+    useBrickPlacement->>placementEngine: handlePointerDown(event)
+    placementEngine->>placementEngine: snapToGrid(event.point)
+    placementEngine->>sceneStore: addBrick({ type, color, position })
+    sceneStore->>historyStore: pushSnapshot(currentBricks)
+    sceneStore-->>BrickInstances: re-render with new brick
 ```
 
-### 5.2 Palette Selection Flow (Fixed)
+### 6.2 Brick Selection Flow (Fixed)
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant BrickPalette
-    participant uiStore
-    participant Viewport
+    participant BrickInstances
+    participant useSelection
+    participant selectionManager
+    participant selectionStore
 
-    User->>BrickPalette: onClick(brickTypeId)
-    BrickPalette->>uiStore: setActiveBrickType(brickTypeId)
-    uiStore-->>BrickPalette: activeBrickType updated (visual highlight)
-    Note over uiStore,Viewport: Next pointer move uses new activeBrickType
-    User->>Viewport: onPointerMove (hover over grid)
-    Viewport->>uiStore: read activeBrickType for ghost preview
-    uiStore-->>Viewport: activeBrickType = selected type
+    User->>BrickInstances: onClick (click on brick mesh)
+    BrickInstances->>useSelection: handleBrickClick(instanceId, event)
+    useSelection->>selectionManager: selectBrick(instanceId)
+    selectionManager->>selectionStore: selectBrick(instanceId)
+    selectionStore-->>BrickInstances: re-render with highlight on selectedBrickId
 ```
 
-### 5.3 Toolbar Undo Flow (Fixed)
+### 6.3 Toolbar Undo Flow (Fixed)
 
 ```mermaid
 sequenceDiagram
@@ -589,17 +463,15 @@ sequenceDiagram
     participant Toolbar
     participant historyStore
     participant sceneStore
-    participant BrickInstances
 
-    User->>Toolbar: onClick(Undo button)
+    User->>Toolbar: onClick Undo button
     Toolbar->>historyStore: undo()
-    historyStore->>sceneStore: removeBrick(lastPlacedBrickId)
-    sceneStore-->>BrickInstances: state update triggers re-render
-    BrickInstances-->>User: Last brick removed from scene
-    historyStore-->>Toolbar: canUndo updated (disables button if empty)
+    historyStore->>historyStore: pop from past, push to future
+    historyStore->>sceneStore: restoreSnapshot(previousSnapshot)
+    sceneStore-->>BrickInstances: re-render with restored bricks
 ```
 
-### 5.4 Keyboard Shortcut Flow (Fixed)
+### 6.4 Keyboard Shortcut Flow (Fixed)
 
 ```mermaid
 sequenceDiagram
@@ -610,278 +482,156 @@ sequenceDiagram
     participant selectionStore
     participant sceneStore
 
-    Note over App.tsx: useKeyboardShortcuts() mounted on App mount
-    User->>Window: keydown (Ctrl+Z)
-    Window->>useKeyboardShortcuts: handler(KeyboardEvent)
+    User->>Window: keydown event (Ctrl+Z)
+    Window->>useKeyboardShortcuts: handler(event)
     useKeyboardShortcuts->>historyStore: undo()
-    historyStore->>sceneStore: reverse last command
-    sceneStore-->>User: Scene updated
+    historyStore-->>sceneStore: restoreSnapshot()
 
-    User->>Window: keydown (Delete)
-    Window->>useKeyboardShortcuts: handler(KeyboardEvent)
-    useKeyboardShortcuts->>sceneStore: removeSelected()
-    sceneStore-->>User: Selected brick removed
+    User->>Window: keydown event (Delete)
+    Window->>useKeyboardShortcuts: handler(event)
+    useKeyboardShortcuts->>selectionStore: deleteSelected()
+    selectionStore->>sceneStore: removeBrick(selectedBrickId)
 ```
 
-### 5.5 Brick Selection Flow (Fixed)
+### 6.5 BrickPalette Selection Flow (Fixed)
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant BrickInstances
-    participant useSelection
-    participant selectionStore
-    participant BrickInstances
+    participant BrickPalette
+    participant uiStore
+    participant Viewport
+    participant useBrickPlacement
 
-    User->>BrickInstances: onClick (on InstancedMesh)
-    BrickInstances->>useSelection: onBrickClick(instanceId)
-    useSelection->>selectionStore: setSelected(brickId)
-    selectionStore-->>BrickInstances: selectedId updated
-    BrickInstances-->>User: Selected brick highlighted (color/outline change)
+    User->>BrickPalette: onClick brick type button
+    BrickPalette->>uiStore: setActiveBrickType('2x4')
+    uiStore-->>BrickPalette: re-render with active highlight
+
+    User->>Viewport: onPointerMove (hover over grid)
+    Viewport->>useBrickPlacement: onPointerMove(event)
+    useBrickPlacement->>uiStore: getActiveBrickType() → '2x4'
+    useBrickPlacement-->>GhostBrick: update ghost preview with '2x4'
 ```
 
 ---
 
-## 6. Interface Contracts
-
-### 6.1 `PlacementHandlers` Interface
-
-```typescript
-// frontend/src/hooks/useBrickPlacement.ts
-export interface PlacementHandlers {
-  onPointerDown: (e: ThreeEvent<PointerEvent>) => void;
-  onPointerMove: (e: ThreeEvent<PointerEvent>) => void;
-  onPointerUp: (e: ThreeEvent<PointerEvent>) => void;
-  onGroundPointerDown: (e: ThreeEvent<PointerEvent>) => void;
-}
-```
-
-### 6.2 `SelectionHandlers` Interface
-
-```typescript
-// frontend/src/hooks/useSelection.ts
-export interface SelectionHandlers {
-  onBrickClick: (instanceId: number) => void;
-}
-```
-
-### 6.3 `ToolbarProps` Interface
-
-```typescript
-// frontend/src/components/ui/Toolbar.tsx
-export interface ToolbarProps {
-  onUndo: () => void;
-  onRedo: () => void;
-  onClear: () => void;
-  onExport: () => void;
-}
-```
-
-### 6.4 `BrickPaletteProps` Interface
-
-```typescript
-// frontend/src/components/ui/BrickPalette.tsx
-export interface BrickPaletteProps {
-  onSelectType: (typeId: string) => void;
-  onSelectColor: (color: string) => void;
-}
-```
-
-### 6.5 `ViewportProps` Interface
-
-```typescript
-// frontend/src/components/viewport/Viewport.tsx
-export interface ViewportProps {
-  placementHandlers: PlacementHandlers;
-}
-```
-
-### 6.6 `BrickInstancesProps` Interface
-
-```typescript
-// frontend/src/components/viewport/BrickInstances.tsx
-export interface BrickInstancesProps {
-  onBrickClick: (instanceId: number) => void;
-}
-```
-
----
-
-## 7. CSS Fix Specification
-
-### 7.1 `frontend/src/index.css` Audit
-
-Audit the following CSS rules and remove/correct any that block pointer events:
-
-| Rule to Check | Action |
-|--------------|--------|
-| `canvas { pointer-events: none; }` | **DELETE** — blocks all R3F events |
-| `.viewport-wrapper { pointer-events: none; }` | **DELETE** — blocks all events |
-| `.app-container { pointer-events: none; }` | **DELETE** — blocks all events |
-| Any `z-index` overlay div covering the canvas | **REMOVE** overlay or set `pointer-events: none` on overlay only |
-| `* { pointer-events: none; }` | **DELETE** — nuclear option that breaks everything |
-
-### 7.2 Required CSS State
-
-```css
-/* index.css — required state after fix */
-body, html {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-}
-
-.app-container {
-  display: flex;
-  width: 100vw;
-  height: 100vh;
-  position: relative;
-  pointer-events: auto;  /* MUST be auto */
-}
-
-.viewport-wrapper {
-  flex: 1;
-  position: relative;
-  pointer-events: auto;  /* MUST be auto */
-}
-
-/* UI overlays (toolbar, palette) must NOT cover the canvas */
-.toolbar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 10;
-  pointer-events: auto;
-}
-
-.brick-palette {
-  position: absolute;
-  right: 0;
-  top: 0;
-  z-index: 10;
-  pointer-events: auto;
-}
-```
-
----
-
-## 8. Error Handling Strategy
+## 7. Error Handling Strategy
 
 | Scenario | Handling |
 |----------|----------|
-| `e.instanceId` is `undefined` on BrickInstances click | Guard: `if (e.instanceId !== undefined)` before calling `onBrickClick` |
-| `snapToGrid` receives a point outside grid bounds | Clamp to grid bounds; do not place brick outside valid area |
-| `historyStore.undo()` called with empty history | `canUndo` guard in Toolbar disables button; store no-ops gracefully |
-| `exportService.exportJSON()` called with empty scene | Export empty array `[]`; do not throw |
-| Keyboard handler fires during text input (e.g., modal) | Check `e.target` is not an `<input>` or `<textarea>` before handling |
-| `useKeyboardShortcuts` unmounts before cleanup | `useEffect` cleanup removes `window.removeEventListener` |
-| R3F pointer event fires on wrong mesh layer | `e.stopPropagation()` on `BrickInstances` click prevents double-firing |
+| `useBrickPlacement` returns undefined handlers | Guard with `?? noop` defaults; log warning in dev mode |
+| `placementEngine.handlePointerDown` throws | Catch in hook, log error, do not crash app |
+| `historyStore.undo()` called with empty past | `canUndo` guard disables button; no-op if called directly |
+| `selectionStore.deleteSelected()` with no selection | No-op; `selectedBrickId === null` guard |
+| CSS overlay blocks events | Detected via pointer-events audit; fixed in index.css |
+| R3F Canvas not receiving events | Verify `eventSource` prop on `<Canvas>` points to correct DOM element |
 
 ---
 
-## 9. Security Considerations
+## 8. Security Considerations
 
-| Concern | Mitigation |
-|---------|------------|
-| Export JSON injection | `exportService.exportJSON()` serializes only typed `Brick[]` data; no `eval` or dynamic code execution |
-| Keyboard shortcut hijacking | Shortcut handler checks `e.target` to avoid firing during form inputs |
-| Pointer event spoofing | All placement logic validates grid bounds before adding bricks to store |
-| Prototype pollution via brick data | Brick objects are plain typed structs; no `Object.assign` from untrusted sources |
+- No authentication or authorization changes required (client-side only).
+- Export JSON functionality must sanitize brick data before download to prevent XSS via crafted brick names/colors.
+- No new network requests introduced by this fix.
+- Keyboard shortcut handler must check `event.target` to avoid triggering shortcuts when user is typing in an input field (e.g., `if (event.target instanceof HTMLInputElement) return`).
+
+---
+
+## 9. Acceptance Criteria Mapping
+
+| Acceptance Criterion | Root Cause Fixed | Test ID |
+|---------------------|-----------------|--------|
+| Clicking ground grid places brick at snapped position | RC-01, RC-02 | T-BUG-088-01 |
+| Clicking BrickPalette type updates active selection | RC-04 | T-BUG-088-02 |
+| Clicking BrickPalette color updates active color | RC-04 | T-BUG-088-02 |
+| Toolbar Undo triggers `historyStore.undo()` | RC-05 | T-BUG-088-03 |
+| Toolbar Redo triggers `historyStore.redo()` | RC-05 | T-BUG-088-03 |
+| Toolbar Clear triggers `sceneStore.clearScene()` | RC-05 | T-BUG-088-03 |
+| Toolbar Export triggers JSON export | RC-05 | T-BUG-088-03 |
+| Clicking existing brick selects it (visual highlight) | RC-01, RC-02 | T-BUG-088-04 |
+| R key rotates placement preview / selected brick | RC-03 | T-BUG-088-05 |
+| Delete key removes selected brick | RC-03 | T-BUG-088-05 |
+| Escape clears selection | RC-03 | T-BUG-088-05 |
+| Ctrl+Z / Ctrl+Y triggers undo/redo | RC-03 | T-BUG-088-05 |
+| Hover shows ghost brick preview | RC-01, RC-02 | T-BUG-088-01 |
+| No pointer-events CSS blocking | RC-06 | T-BUG-088-06 |
 
 ---
 
 ## 10. Files to Modify
 
-| File | Change Type | Root Cause Fixed |
-|------|-------------|------------------|
-| `frontend/src/components/App.tsx` | Mount hooks, wire props | RC-2, RC-3, RC-4, RC-5 |
-| `frontend/src/components/viewport/Viewport.tsx` | Accept `placementHandlers` prop, mount `useSelection`, pass to children | RC-2, RC-6 |
-| `frontend/src/components/viewport/ViewportCanvas.tsx` | Forward pointer event props to `<Canvas>`, fix wrapper CSS | RC-1, RC-2 |
-| `frontend/src/components/viewport/BrickInstances.tsx` | Accept `onBrickClick` prop, wire to `InstancedMesh` onClick | RC-6 |
-| `frontend/src/components/ui/BrickPalette.tsx` | Accept `onSelectType`/`onSelectColor` props, wire to item onClick | RC-4 |
-| `frontend/src/components/ui/Toolbar.tsx` | Accept action props, wire to button onClick | RC-5 |
-| `frontend/src/hooks/useBrickPlacement.ts` | Ensure returns `PlacementHandlers` interface with all handlers | RC-2 |
-| `frontend/src/hooks/useKeyboardShortcuts.ts` | Verify window listener logic (no change if correct) | RC-3 |
-| `frontend/src/hooks/useSelection.ts` | Ensure returns `SelectionHandlers` interface | RC-6 |
-| `frontend/src/index.css` | Remove `pointer-events: none` rules, fix z-index overlays | RC-1 |
+| File | Change Type | Root Cause |
+|------|------------|------------|
+| `frontend/src/components/App.tsx` | Mount `useKeyboardShortcuts()` | RC-03 |
+| `frontend/src/components/viewport/Viewport.tsx` | Mount `useBrickPlacement()`, `useSelection()`; spread handlers | RC-01, RC-02 |
+| `frontend/src/components/viewport/ViewportCanvas.tsx` | Accept and forward pointer event props | RC-01 |
+| `frontend/src/components/viewport/GroundGrid.tsx` | Accept `onPointerDown` prop | RC-01 |
+| `frontend/src/components/viewport/BrickInstances.tsx` | Accept `onBrickClick` prop; wire to instance click | RC-01 |
+| `frontend/src/components/ui/BrickPalette.tsx` | Wire `onClick` to `uiStore.setActiveBrickType/Color` | RC-04 |
+| `frontend/src/components/ui/Toolbar.tsx` | Wire `onClick` to `historyStore`, `sceneStore`, export | RC-05 |
+| `frontend/src/hooks/useBrickPlacement.ts` | Ensure returns `{ onPointerDown, onPointerMove, onPointerUp }` | RC-02 |
+| `frontend/src/hooks/useSelection.ts` | Ensure returns `{ handleBrickClick }` | RC-02 |
+| `frontend/src/hooks/useKeyboardShortcuts.ts` | Ensure registers `window` keydown listener | RC-03 |
+| `frontend/src/index.css` | Remove any `pointer-events: none` on canvas/viewport containers | RC-06 |
 
 ---
 
-## 11. Test Strategy
+## 11. Testing Strategy
 
-### 11.1 Regression Tests to Add
+### Unit Tests (Vitest + React Testing Library)
 
 | Test ID | Description | File |
 |---------|-------------|------|
-| T-BUG-088-01 | Clicking ground grid places brick at snapped position | `frontend/src/__tests__/brickPlacement.test.tsx` |
-| T-BUG-088-02 | Clicking BrickPalette item updates `uiStore.activeBrickType` | `frontend/src/__tests__/brickPalette.test.tsx` |
-| T-BUG-088-03 | Toolbar Undo button calls `historyStore.undo()` | `frontend/src/__tests__/toolbar.test.tsx` |
-| T-BUG-088-04 | Ctrl+Z keyboard shortcut triggers undo | `frontend/src/__tests__/keyboardShortcuts.test.tsx` |
-| T-BUG-088-05 | Clicking BrickInstances mesh selects brick in `selectionStore` | `frontend/src/__tests__/brickSelection.test.tsx` |
-| T-BUG-088-06 | Delete key removes selected brick from `sceneStore` | `frontend/src/__tests__/keyboardShortcuts.test.tsx` |
-| T-BUG-088-07 | Escape key clears selection in `selectionStore` | `frontend/src/__tests__/keyboardShortcuts.test.tsx` |
-| T-BUG-088-08 | Toolbar Clear button calls `sceneStore.clearScene()` | `frontend/src/__tests__/toolbar.test.tsx` |
-| T-BUG-088-09 | Toolbar Export button calls `exportService.exportJSON()` | `frontend/src/__tests__/toolbar.test.tsx` |
-| T-BUG-088-10 | Hovering ground grid updates `uiStore.previewPosition` | `frontend/src/__tests__/brickPlacement.test.tsx` |
+| T-BUG-088-01 | Simulating `pointerdown` on GroundGrid calls `placementEngine.handlePointerDown` | `Viewport.test.tsx` |
+| T-BUG-088-02 | Clicking brick type button in BrickPalette calls `uiStore.setActiveBrickType` | `BrickPalette.test.tsx` |
+| T-BUG-088-03 | Clicking Undo/Redo/Clear/Export buttons calls respective store actions | `Toolbar.test.tsx` |
+| T-BUG-088-04 | Clicking BrickInstances mesh calls `selectionManager.selectBrick` | `BrickInstances.test.tsx` |
+| T-BUG-088-05 | Dispatching `keydown` events triggers correct store actions | `useKeyboardShortcuts.test.ts` |
+| T-BUG-088-06 | CSS audit: no `pointer-events: none` on `.viewport-container` | `index.css.test.ts` (or manual) |
 
-### 11.2 Test Approach
+### Integration Tests
 
-- Use **Vitest + React Testing Library** for component tests
-- Use **`@testing-library/user-event`** for simulating click/keyboard events
-- Mock R3F `ThreeEvent` objects for pointer event tests
-- Mock Zustand stores using `zustand/testing` or direct `getState().setState()`
-- Each test must **fail without the fix** and **pass with the fix** (regression guard)
+- End-to-end flow: open app → click palette → click grid → brick appears in scene
+- Undo/redo cycle: place brick → undo → brick removed → redo → brick restored
+- Keyboard shortcut cycle: place brick → press Delete → brick removed
+
+### Regression Guard
+
+- All existing tests (useAutoSave, ResumePrompt) must continue to pass
+- No new TypeScript errors introduced
 
 ---
 
-## 12. Acceptance Criteria Mapping
+## 12. Non-Functional Requirements
 
-| Acceptance Criterion | Root Cause Fixed | Test ID |
-|---------------------|------------------|---------|
-| Clicking ground grid places brick at snapped position | RC-1, RC-2 | T-BUG-088-01 |
-| BrickPalette click updates active selection + visual feedback | RC-4 | T-BUG-088-02 |
-| Color swatch click updates active brick color | RC-4 | T-BUG-088-02 |
-| Toolbar Undo triggers `historyStore.undo()` | RC-5 | T-BUG-088-03 |
-| Toolbar Redo triggers `historyStore.redo()` | RC-5 | T-BUG-088-03 |
-| Toolbar Clear triggers `sceneStore.clearScene()` | RC-5 | T-BUG-088-08 |
-| Toolbar Export triggers JSON export | RC-5 | T-BUG-088-09 |
-| Clicking existing brick selects it (visual highlight) | RC-6 | T-BUG-088-05 |
-| R key rotates placement preview | RC-3 | T-BUG-088-04 |
-| Delete key removes selected brick | RC-3 | T-BUG-088-06 |
-| Escape clears selection | RC-3 | T-BUG-088-07 |
-| Ctrl+Z / Ctrl+Y triggers undo/redo | RC-3 | T-BUG-088-04 |
-| Hover shows ghost brick preview | RC-1, RC-2 | T-BUG-088-10 |
-| All existing tests still pass | — | All existing |
+| NFR | Target |
+|-----|--------|
+| Pointer event latency | < 16ms (one frame at 60fps) from click to visual feedback |
+| No memory leaks | `useKeyboardShortcuts` must clean up `window.removeEventListener` on unmount |
+| No re-render storms | Store subscriptions must be granular (select only needed slice) |
+| TypeScript strict mode | All new/modified code must pass `tsc --strict` with zero errors |
+| Bundle size | No new dependencies; fix is pure wiring |
 
 ---
 
 ## 13. Implementation Order
 
-Fix in this order to minimize cascading failures during development:
+The following order minimizes risk and allows incremental verification:
 
-1. **RC-1** — Fix `index.css` pointer-events (unblocks all subsequent testing)
-2. **RC-2** — Fix `useBrickPlacement` hook mounting and `Viewport`/`ViewportCanvas` wiring
-3. **RC-4** — Fix `BrickPalette` onClick handlers (needed for placement to use correct type)
-4. **RC-5** — Fix `Toolbar` onClick handlers
-5. **RC-6** — Fix `BrickInstances` onClick → selection wiring
-6. **RC-3** — Fix `useKeyboardShortcuts` mounting in `App.tsx`
-7. **Tests** — Add all T-BUG-088-xx regression tests
-
----
-
-## 14. Non-Functional Requirements
-
-| NFR | Target | Verification |
-|-----|--------|--------------|
-| Pointer event latency | < 16ms (one frame at 60fps) | Manual testing / browser DevTools |
-| No memory leaks from event listeners | Zero leaked listeners on unmount | React DevTools Profiler |
-| Keyboard handler does not fire in text inputs | Zero false positives | T-BUG-088-04 with input focus |
-| No regression in camera orbit controls | OrbitControls still functional after fix | Manual smoke test |
-| Bundle size delta | < 1 KB (wiring changes only, no new deps) | Vite build output |
+1. **RC-06 first** — Audit and fix CSS `pointer-events`. Cheapest fix; unblocks all others if this is the sole cause.
+2. **RC-04** — Wire `BrickPalette` onClick handlers. Isolated UI component; easy to test.
+3. **RC-05** — Wire `Toolbar` onClick handlers. Isolated UI component; easy to test.
+4. **RC-03** — Mount `useKeyboardShortcuts` in `App.tsx`. Single line addition.
+5. **RC-02** — Verify `useBrickPlacement` and `useSelection` return correct handler shapes.
+6. **RC-01** — Wire pointer events through `Viewport` → `ViewportCanvas` → `GroundGrid`/`BrickInstances`.
 
 ---
 
-*Generated by Spectra Framework — design-agent*  
-*Issue: #88 | FR-ID: BUG | Date: 2026-04-12*
+## 14. Open Questions
+
+| # | Question | Impact | Owner |
+|---|----------|--------|-------|
+| OQ-1 | Does `ViewportCanvas` use R3F `<Canvas>` `eventSource` prop to target a specific DOM element? If so, is it pointing to the correct ref? | Could explain why pointer events never reach R3F objects | Frontend Coding Agent |
+| OQ-2 | Does `useCameraControls` use `OrbitControls` with `makeDefault`? If so, it may be consuming all pointer events before placement handlers run. | Needs `enablePan`/`enableZoom` event priority tuning | Frontend Coding Agent |
+| OQ-3 | Are there any React portals or modal overlays rendered above the viewport that could intercept events? | CSS z-index audit needed | Frontend Coding Agent |
+| OQ-4 | Is `BrickPalette` using a drag-and-drop library (e.g., `react-dnd`) that requires a `DndProvider` wrapper in `App.tsx`? | If yes, `DndProvider` must be added | Frontend Coding Agent |
