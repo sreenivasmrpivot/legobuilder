@@ -9,18 +9,12 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          three: ['three', '@react-three/fiber', '@react-three/drei'],
-        },
-      },
-    },
-  },
   server: {
-    port: 5173,
+    port: 3000,
     host: true,
+  },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
   },
 });
