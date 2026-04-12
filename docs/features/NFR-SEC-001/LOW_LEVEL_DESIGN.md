@@ -1,501 +1,455 @@
-# Low-Level Design: NFR-SEC-001
-## Validate All Imported JSON Files Against Schema; Prevent Arbitrary Code Execution
+# Low-Level Design: NFR-SEC-001 — JSON Import Validation & Arbitrary Code Execution Prevention
 
 **FR-ID:** NFR-SEC-001  
-**Issue:** [#32](https://github.com/sreenivasmrpivot/legobuilder/issues/32)  
-**Status:** Draft — Awaiting Gate 6a Design Review  
+**Issue:** #32  
+**Area:** frontend  
+**Status:** Draft — Awaiting Gate 6a Human Review  
 **Author:** Spectra Design Agent  
-**Date:** 2026-04-11  
+**Date:** 2026-04-12  
 
 ---
 
 ## 1. Overview
 
-NFR-SEC-001 mandates that **all JSON data imported into LegoBuilder** (project files, brick scenes, catalog overrides) is validated against a strict schema before any processing occurs. No executable code paths may be triggered by imported data. This LLD defines the validation architecture, schema contracts, error handling strategy, and security boundaries for the `importService` and `exportSchema` modules in the frontend SPA.
+NFR-SEC-001 mandates that **all imported JSON files are validated against the LegoBuilder schema before any data is processed**, and that **no arbitrary code execution is possible from imported data**. This is a pure client-side security NFR for the LegoBuilder SPA (React + Vite + TypeScript).
 
-### 1.1 Scope
+### 1.1 Problem Statement
+
+The existing `importService.ts` calls `JSON.parse()` on user-supplied file content and passes the result directly to `sceneStore.loadScene()` without structural validation. This creates multiple attack surfaces:
+
+- **Prototype pollution** via `__proto__`, `constructor`, or `prototype` keys
+- **JSON bombs** (deeply nested or extremely large payloads causing DoS)
+- **XSS via string fields** (malicious strings in `id`, `color`, `catalogId` fields)
+- **MIME spoofing** (non-JSON files accepted as JSON)
+- **Arbitrary code execution** via `eval()`, `Function()`, or `setTimeout(string)` patterns in downstream code
+
+### 1.2 Scope
 
 | In Scope | Out of Scope |
 |---|---|
-| JSON import validation (file picker, drag-and-drop, localStorage restore) | Server-side validation (no backend exists) |
-| Schema definition for LegoBuilder project format v1 | Binary file formats (LDraw, BrickLink XML) |
-| Malformed / oversized / malicious payload rejection | Runtime React prop validation |
-| Prototype pollution prevention | Third-party library supply-chain security |
-| Size and depth limits | Network request validation |
-
-### 1.2 Affected Files
-
-| File | Role | Change Type |
-|---|---|---|
-| `frontend/src/engine/exportSchema.ts` | Canonical JSON schema definition | Enhance |
-| `frontend/src/services/importService.ts` | JSON parse + validate pipeline | Enhance |
-| `frontend/src/engine/jsonValidator.ts` | New — pure validation engine | Create |
-| `frontend/src/types/validation.ts` | New — validation result types | Create |
-| `frontend/src/utils/sanitize.ts` | New — string sanitization helpers | Create |
+| JSON file import validation pipeline | Server-side validation (no backend) |
+| Prototype pollution prevention | Network request validation |
+| JSON bomb / DoS mitigation | WebSocket or API security |
+| XSS via string field sanitization | Authentication / authorization |
+| MIME type enforcement | Third-party library supply chain |
+| ESLint `no-eval` enforcement | Runtime CSP (covered by NFR-SEC-002) |
+| Unit tests with malformed/malicious payloads | |
 
 ---
 
-## 2. Data Models
+## 2. Architecture Overview
 
-### 2.1 LegoBuilder Project JSON Schema (v1)
-
-The canonical schema for a `.lbp` (LegoBuilder Project) JSON file:
-
-```typescript
-// frontend/src/engine/exportSchema.ts
-export const LEGOBUILDER_SCHEMA_VERSION = '1.0.0';
-export const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB hard limit
-export const MAX_BRICK_COUNT = 10_000;
-export const MAX_STRING_LENGTH = 256;
-export const MAX_JSON_DEPTH = 8;
-
-export interface LegoBuilderProjectSchema {
-  schemaVersion: string;       // semver string, e.g. "1.0.0"
-  projectName: string;         // max 256 chars, no HTML/script
-  createdAt: string;           // ISO 8601 timestamp
-  updatedAt: string;           // ISO 8601 timestamp
-  scene: SceneSchema;
-}
-
-export interface SceneSchema {
-  bricks: BrickInstanceSchema[];
-  camera?: CameraSchema;
-}
-
-export interface BrickInstanceSchema {
-  id: string;                  // UUID v4 pattern
-  catalogId: string;           // must exist in BRICK_CATALOG
-  position: Vector3Schema;
-  rotation: RotationSchema;
-  color: string;               // hex color #RRGGBB
-}
-
-export interface Vector3Schema {
-  x: number;                   // finite, -1000 to 1000
-  y: number;                   // finite, 0 to 500
-  z: number;                   // finite, -1000 to 1000
-}
-
-export interface RotationSchema {
-  y: number;                   // 0 | 90 | 180 | 270 (degrees)
-}
-
-export interface CameraSchema {
-  position: Vector3Schema;
-  target: Vector3Schema;
-  zoom: number;                // 0.1 to 10.0
-}
+```
+User selects file
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     importService.ts                            │
+│                                                                 │
+│  readFile() → parseJson() → validateProjectJson() → sanitize() │
+│                                    │                            │
+│                              jsonValidator.ts                   │
+│                              sanitize.ts                        │
+└─────────────────────────────────────────────────────────────────┘
+       │
+       ▼ (only on ValidationResult.valid === true)
+sceneStore.loadScene(sanitizedData)
 ```
 
-### 2.2 Validation Result Type
+### 2.1 New Modules
+
+| Module | Path | Responsibility |
+|--------|------|----------------|
+| `jsonValidator` | `frontend/src/utils/jsonValidator.ts` | Pure validation function — schema checks, depth limit, prototype pollution detection |
+| `sanitize` | `frontend/src/utils/sanitize.ts` | String sanitization helpers — strip HTML, enforce allowlists |
+
+### 2.2 Modified Modules
+
+| Module | Path | Change |
+|--------|------|--------|
+| `importService` | `frontend/src/services/importService.ts` | Wire `validateProjectJson()` before `sceneStore.loadScene()` |
+| `eslint.config.js` | `frontend/eslint.config.js` | Add `no-eval`, `no-new-func`, `no-implied-eval` rules |
+
+---
+
+## 3. Data Models
+
+### 3.1 ValidationResult
 
 ```typescript
-// frontend/src/types/validation.ts
-export type ValidationSeverity = 'error' | 'warning';
+export type ValidationErrorCode =
+  | 'FILE_TOO_LARGE'          // File exceeds MAX_FILE_SIZE_BYTES
+  | 'INVALID_MIME_TYPE'       // File MIME type is not application/json or text/plain
+  | 'INVALID_JSON_SYNTAX'     // JSON.parse() threw SyntaxError
+  | 'DEPTH_LIMIT_EXCEEDED'    // Object nesting depth > MAX_DEPTH
+  | 'PROTOTYPE_POLLUTION'     // __proto__, constructor, or prototype key detected
+  | 'MISSING_REQUIRED_FIELD'  // Top-level required field absent
+  | 'INVALID_FIELD_TYPE'      // Field has wrong TypeScript type
+  | 'INVALID_SCHEMA_VERSION'  // version field is incompatible
+  | 'BRICK_VALIDATION_FAILED' // One or more bricks failed per-brick validation
+  | 'BRICK_COUNT_EXCEEDED'    // bricks array length > MAX_BRICK_COUNT
+  | 'INVALID_BRICK_ID'        // brickId does not match UUID v4 regex
+  | 'INVALID_CATALOG_ID'      // catalogId not in BRICK_CATALOG allowlist
+  | 'INVALID_COLOR'           // color does not match #RRGGBB regex
+  | 'INVALID_ROTATION'        // rotation not in {0, 90, 180, 270}
+  | 'INVALID_POSITION'        // position.x/y/z not finite numbers or out of grid bounds
+  | 'INVALID_STRING_CONTENT'; // String field contains disallowed characters
 
-export interface ValidationIssue {
-  code: string;          // e.g. 'SCHEMA_VERSION_MISMATCH'
-  severity: ValidationSeverity;
-  path: string;          // JSON path, e.g. 'scene.bricks[3].color'
-  message: string;       // human-readable, safe to display
+export interface ValidationError {
+  code: ValidationErrorCode;
+  message: string;           // Human-readable description
+  field?: string;            // JSON path to the offending field (e.g., 'bricks[3].color')
+  brickIndex?: number;       // Index of the offending brick (if applicable)
 }
 
 export interface ValidationResult {
   valid: boolean;
-  issues: ValidationIssue[];
-  sanitizedData?: LegoBuilderProjectSchema; // only present when valid === true
+  errors: ValidationError[];  // Empty array when valid === true
+  sanitizedData?: ProjectJson; // Present only when valid === true
 }
 ```
 
-### 2.3 Error Code Registry
+### 3.2 ProjectJson (Import Schema)
 
-| Code | Severity | Trigger |
-|---|---|---|
-| `FILE_TOO_LARGE` | error | Raw bytes > 5 MB |
-| `INVALID_JSON_SYNTAX` | error | `JSON.parse` throws |
-| `DEPTH_LIMIT_EXCEEDED` | error | Object nesting > 8 levels |
-| `MISSING_REQUIRED_FIELD` | error | Required key absent |
-| `WRONG_TYPE` | error | Field type mismatch |
-| `SCHEMA_VERSION_MISMATCH` | error | `schemaVersion` not in supported list |
-| `BRICK_COUNT_EXCEEDED` | error | `scene.bricks.length > 10,000` |
-| `UNKNOWN_CATALOG_ID` | error | `catalogId` not in `BRICK_CATALOG` |
-| `INVALID_UUID` | error | `id` fails UUID v4 regex |
-| `OUT_OF_RANGE` | error | Numeric field outside allowed bounds |
-| `STRING_TOO_LONG` | error | String field > 256 chars |
-| `PROTOTYPE_POLLUTION` | error | Key is `__proto__`, `constructor`, or `prototype` |
-| `INVALID_COLOR` | error | `color` fails `#RRGGBB` regex |
-| `INVALID_ROTATION` | error | `rotation.y` not in `{0, 90, 180, 270}` |
-| `INVALID_TIMESTAMP` | warning | `createdAt`/`updatedAt` not ISO 8601 |
+```typescript
+export interface BrickData {
+  id: string;           // UUID v4
+  catalogId: string;    // Must be in BRICK_CATALOG keys
+  position: {
+    x: number;          // Integer, -64 to 64
+    y: number;          // Integer, 0 to 128
+    z: number;          // Integer, -64 to 64
+  };
+  rotation: 0 | 90 | 180 | 270;
+  color: string;        // #RRGGBB hex
+}
+
+export interface ProjectJson {
+  version: string;      // Semver string, e.g. "1.0.0"
+  metadata: {
+    name: string;       // Max 256 chars, alphanumeric + spaces + hyphens
+    createdAt: string;  // ISO 8601 date string
+    schemaVersion: string;
+  };
+  bricks: BrickData[];  // Max MAX_BRICK_COUNT entries
+}
+```
+
+### 3.3 Security Constants
+
+```typescript
+export const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+export const MAX_DEPTH = 10;                         // Max JSON nesting depth
+export const MAX_BRICK_COUNT = 500;                  // Max bricks per import
+export const MAX_STRING_LENGTH = 1024;               // Max length for any string field
+export const ALLOWED_MIME_TYPES = [
+  'application/json',
+  'text/plain',
+  'text/json',
+] as const;
+export const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const HEX_COLOR_REGEX = /^#[0-9A-Fa-f]{6}$/;
+export const VALID_ROTATIONS = new Set([0, 90, 180, 270]);
+export const PROTOTYPE_POLLUTION_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+```
 
 ---
 
-## 3. Component Architecture
+## 4. Component Architecture
 
-### 3.1 Module Dependency Graph
-
-```
-importService.ts
-    │
-    ├── jsonValidator.ts          ← pure validation, no side effects
-    │       ├── exportSchema.ts   ← schema constants & type guards
-    │       └── sanitize.ts       ← string sanitization helpers
-    │
-    └── sceneStore (Zustand)      ← only receives sanitizedData on success
-```
-
-### 3.2 `jsonValidator.ts` — Pure Validation Engine
+### 4.1 `jsonValidator.ts` — Pure Validation Engine
 
 ```typescript
-// frontend/src/engine/jsonValidator.ts
+// frontend/src/utils/jsonValidator.ts
 
-import { BRICK_CATALOG } from './brickCatalog';
+import type { ValidationResult, ValidationError, ProjectJson } from '../types/project';
 import {
-  MAX_FILE_SIZE_BYTES, MAX_BRICK_COUNT, MAX_STRING_LENGTH,
-  MAX_JSON_DEPTH, LEGOBUILDER_SCHEMA_VERSION,
-  LegoBuilderProjectSchema
-} from './exportSchema';
-import { ValidationResult, ValidationIssue } from '../types/validation';
-import { sanitizeString, checkPrototypePollution } from '../utils/sanitize';
-
-// ── Public API ────────────────────────────────────────────────────────────────
+  MAX_FILE_SIZE_BYTES,
+  MAX_DEPTH,
+  MAX_BRICK_COUNT,
+  MAX_STRING_LENGTH,
+  UUID_V4_REGEX,
+  HEX_COLOR_REGEX,
+  VALID_ROTATIONS,
+  PROTOTYPE_POLLUTION_KEYS,
+} from '../constants/security';
+import { BRICK_CATALOG } from '../constants/brickCatalog';
+import { sanitizeString } from './sanitize';
 
 /**
- * Validates raw JSON text against the LegoBuilder project schema.
- * Returns a ValidationResult; never throws.
- * Does NOT mutate global state.
+ * Validates and sanitizes a raw parsed JSON object against the ProjectJson schema.
+ * Pure function — no I/O, no side effects.
+ * Returns ValidationResult with sanitizedData on success.
  */
 export function validateProjectJson(
-  rawText: string,
-  fileSizeBytes: number
-): ValidationResult { ... }
+  raw: unknown,
+  fileSizeBytes: number,
+  mimeType: string
+): ValidationResult;
 
-// ── Internal helpers (exported for unit testing) ─────────────────────────────
+/**
+ * Checks object nesting depth recursively.
+ * Returns true if depth exceeds MAX_DEPTH.
+ */
+function exceedsDepthLimit(obj: unknown, currentDepth: number): boolean;
 
-export function checkFileSize(bytes: number): ValidationIssue | null { ... }
-export function parseJsonSafely(text: string): { data: unknown } | { error: ValidationIssue } { ... }
-export function checkDepth(value: unknown, maxDepth: number, path?: string): ValidationIssue | null { ... }
-export function validateTopLevel(data: unknown): ValidationIssue[] { ... }
-export function validateScene(scene: unknown): ValidationIssue[] { ... }
-export function validateBrick(brick: unknown, index: number): ValidationIssue[] { ... }
-export function validateVector3(v: unknown, path: string): ValidationIssue[] { ... }
-export function validateCamera(camera: unknown): ValidationIssue[] { ... }
-export function validateColor(color: unknown, path: string): ValidationIssue | null { ... }
-export function validateRotation(rotation: unknown, path: string): ValidationIssue | null { ... }
-export function validateUUID(id: unknown, path: string): ValidationIssue | null { ... }
+/**
+ * Scans all keys in an object recursively for prototype pollution keys.
+ * Returns the first offending key path, or null if clean.
+ */
+function detectPrototypePollution(obj: unknown, path: string): string | null;
+
+/**
+ * Validates a single BrickData entry.
+ * Returns array of ValidationErrors (empty if valid).
+ */
+function validateBrick(brick: unknown, index: number): ValidationError[];
 ```
 
-**Key design constraints:**
-- `validateProjectJson` is a **pure function** — no I/O, no global mutation.
-- All string fields are passed through `sanitizeString` before inclusion in `sanitizedData`.
-- Prototype pollution check runs **before** any property access on parsed data.
-- Validation short-circuits on `FILE_TOO_LARGE` and `INVALID_JSON_SYNTAX` (no further checks).
+**Validation Algorithm (validateProjectJson):**
 
-### 3.3 `sanitize.ts` — String Sanitization Helpers
+```
+1. CHECK file size: fileSizeBytes > MAX_FILE_SIZE_BYTES → FILE_TOO_LARGE (short-circuit)
+2. CHECK MIME type: mimeType not in ALLOWED_MIME_TYPES → INVALID_MIME_TYPE (short-circuit)
+3. CHECK prototype pollution: detectPrototypePollution(raw, '') → PROTOTYPE_POLLUTION (short-circuit)
+4. CHECK depth: exceedsDepthLimit(raw, 0) → DEPTH_LIMIT_EXCEEDED (short-circuit)
+5. CHECK top-level type: typeof raw !== 'object' || raw === null → MISSING_REQUIRED_FIELD
+6. CHECK required fields: version, metadata, bricks present → MISSING_REQUIRED_FIELD
+7. CHECK version: semver parse, major version compatibility → INVALID_SCHEMA_VERSION
+8. CHECK metadata.name: string, max 256 chars → INVALID_FIELD_TYPE / INVALID_STRING_CONTENT
+9. CHECK metadata.createdAt: valid ISO 8601 → INVALID_FIELD_TYPE
+10. CHECK bricks: Array.isArray → INVALID_FIELD_TYPE
+11. CHECK bricks.length <= MAX_BRICK_COUNT → BRICK_COUNT_EXCEEDED
+12. FOR EACH brick: validateBrick(brick, index) → BRICK_VALIDATION_FAILED
+13. IF any errors: return { valid: false, errors }
+14. ELSE: deep-clone with structuredClone(), sanitize all strings → return { valid: true, sanitizedData }
+```
+
+**validateBrick Algorithm:**
+
+```
+1. CHECK id: UUID_V4_REGEX.test(brick.id) → INVALID_BRICK_ID
+2. CHECK catalogId: BRICK_CATALOG.has(brick.catalogId) → INVALID_CATALOG_ID
+3. CHECK color: HEX_COLOR_REGEX.test(brick.color) → INVALID_COLOR
+4. CHECK rotation: VALID_ROTATIONS.has(brick.rotation) → INVALID_ROTATION
+5. CHECK position: object with x, y, z → INVALID_FIELD_TYPE
+6. CHECK position.x: Number.isFinite(x) && x >= -64 && x <= 64 → INVALID_POSITION
+7. CHECK position.y: Number.isFinite(y) && y >= 0 && y <= 128 → INVALID_POSITION
+8. CHECK position.z: Number.isFinite(z) && z >= -64 && z <= 64 → INVALID_POSITION
+```
+
+### 4.2 `sanitize.ts` — String Sanitization Helpers
 
 ```typescript
 // frontend/src/utils/sanitize.ts
 
 /**
- * Strips HTML tags and control characters from a string.
- * Truncates to maxLength. Returns empty string for non-string input.
+ * Strips HTML tags and encodes dangerous characters from a string.
+ * Used on all string fields after validation passes.
  */
-export function sanitizeString(value: unknown, maxLength = MAX_STRING_LENGTH): string { ... }
+export function sanitizeString(input: string): string;
 
 /**
- * Recursively checks an object for prototype pollution keys.
- * Returns true if any key is '__proto__', 'constructor', or 'prototype'.
+ * Truncates a string to maxLength characters.
  */
-export function checkPrototypePollution(obj: unknown): boolean { ... }
+export function truncateString(input: string, maxLength: number): string;
 
 /**
- * Validates a string matches ISO 8601 datetime format.
+ * Deep-clones an object using structuredClone() and sanitizes all string values.
+ * Breaks any prototype chain from JSON.parse() output.
  */
-export function isISO8601(value: string): boolean { ... }
-
-/**
- * Validates a string matches UUID v4 format.
- */
-export function isUUIDv4(value: string): boolean { ... }
-
-/**
- * Validates a string matches #RRGGBB hex color format.
- */
-export function isHexColor(value: string): boolean { ... }
+export function deepSanitize<T>(obj: T): T;
 ```
 
-### 3.4 `importService.ts` — Enhanced Import Pipeline
+**sanitizeString implementation:**
+```typescript
+export function sanitizeString(input: string): string {
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+}
+```
+
+### 4.3 Updated `importService.ts`
 
 ```typescript
 // frontend/src/services/importService.ts
 
-import { validateProjectJson } from '../engine/jsonValidator';
-import { ValidationResult } from '../types/validation';
+import { validateProjectJson } from '../utils/jsonValidator';
+import type { ValidationResult } from '../types/project';
 
 export interface ImportResult {
   success: boolean;
-  data?: LegoBuilderProjectSchema;
-  errors: ValidationIssue[];
-  warnings: ValidationIssue[];
+  error?: string;       // User-facing error message
+  errorCode?: string;   // Machine-readable error code
 }
 
 /**
- * Entry point for file-picker imports.
- * Reads File object, validates, returns ImportResult.
- * Never calls eval() or Function().
+ * Reads a File object, validates it against the ProjectJson schema,
+ * and loads the sanitized data into sceneStore.
+ * 
+ * Returns ImportResult — never throws.
  */
-export async function importFromFile(file: File): Promise<ImportResult> {
-  // 1. Size guard (before reading)
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    return { success: false, errors: [FILE_TOO_LARGE_ISSUE], warnings: [] };
-  }
-  // 2. Read as text
-  const text = await file.text();
-  // 3. Validate
-  const result = validateProjectJson(text, file.size);
-  // 4. Return structured result
-  return toImportResult(result);
-}
+export async function importFromFile(file: File): Promise<ImportResult>;
 
 /**
- * Entry point for localStorage restore.
- * Validates stored string before hydrating Zustand store.
+ * Reads file content as text using FileReader.
+ * Returns the raw string content.
  */
-export function importFromLocalStorage(raw: string | null): ImportResult {
-  if (!raw) return { success: false, errors: [EMPTY_PAYLOAD_ISSUE], warnings: [] };
-  const result = validateProjectJson(raw, new Blob([raw]).size);
-  return toImportResult(result);
-}
+function readFileAsText(file: File): Promise<string>;
 
 /**
- * Entry point for drag-and-drop.
- * Delegates to importFromFile after MIME type check.
+ * Parses JSON string. Returns { data, error } — never throws.
  */
-export async function importFromDrop(dataTransfer: DataTransfer): Promise<ImportResult> {
-  const file = dataTransfer.files[0];
-  if (!file || !isAllowedMimeType(file.type)) {
-    return { success: false, errors: [INVALID_MIME_ISSUE], warnings: [] };
-  }
-  return importFromFile(file);
-}
-
-// ── Private helpers ───────────────────────────────────────────────────────────
-function isAllowedMimeType(type: string): boolean {
-  return type === 'application/json' || type === 'application/octet-stream' || type === '';
-}
-
-function toImportResult(result: ValidationResult): ImportResult {
-  return {
-    success: result.valid,
-    data: result.sanitizedData,
-    errors: result.issues.filter(i => i.severity === 'error'),
-    warnings: result.issues.filter(i => i.severity === 'warning'),
-  };
-}
+function safeParseJson(text: string): { data: unknown; error: string | null };
 ```
 
----
+**importFromFile pipeline:**
 
-## 4. API / Interface Contracts
-
-### 4.1 `validateProjectJson` Contract
-
-| Parameter | Type | Constraint |
-|---|---|---|
-| `rawText` | `string` | Raw file content, not pre-parsed |
-| `fileSizeBytes` | `number` | Byte count from `File.size` or `Blob.size` |
-
-**Returns:** `ValidationResult`
-
-| Field | Type | Meaning |
-|---|---|---|
-| `valid` | `boolean` | `true` only if zero error-severity issues |
-| `issues` | `ValidationIssue[]` | All errors and warnings found |
-| `sanitizedData` | `LegoBuilderProjectSchema \| undefined` | Present only when `valid === true` |
-
-**Guarantees:**
-- Never throws — all exceptions are caught and converted to `ValidationIssue`.
-- `sanitizedData` is a **deep clone** of the parsed data with all strings sanitized.
-- `sanitizedData` contains **no prototype chain pollution** — created via `Object.create(null)` patterns.
-- Execution time ≤ 200 ms for files up to 5 MB (measured in Vitest benchmarks).
-
-### 4.2 `importFromFile` Contract
-
-| Scenario | `success` | `errors` | `data` |
-|---|---|---|---|
-| Valid `.lbp` file | `true` | `[]` | Populated |
-| File > 5 MB | `false` | `[FILE_TOO_LARGE]` | `undefined` |
-| Malformed JSON | `false` | `[INVALID_JSON_SYNTAX]` | `undefined` |
-| Schema violation | `false` | One or more issues | `undefined` |
-| Prototype pollution | `false` | `[PROTOTYPE_POLLUTION]` | `undefined` |
-| Unknown catalogId | `false` | `[UNKNOWN_CATALOG_ID]` | `undefined` |
-
-### 4.3 Zustand Store Integration
-
-```typescript
-// sceneStore.ts — only accepts validated data
-import { importFromFile } from '../services/importService';
-
-const useSceneStore = create<SceneState>((set) => ({
-  // ...
-  importProject: async (file: File) => {
-    const result = await importFromFile(file);
-    if (!result.success) {
-      // Surface errors to UI — never load partial data
-      set({ importError: result.errors });
-      return;
-    }
-    // Only reach here with fully validated, sanitized data
-    set({ bricks: result.data!.scene.bricks, importError: null });
-  },
-}));
+```
+1. CHECK file.size > MAX_FILE_SIZE_BYTES → return { success: false, errorCode: 'FILE_TOO_LARGE' }
+2. READ file content via readFileAsText()
+3. PARSE JSON via safeParseJson() → on SyntaxError: return { success: false, errorCode: 'INVALID_JSON_SYNTAX' }
+4. VALIDATE via validateProjectJson(parsed, file.size, file.type)
+5. IF !result.valid → return { success: false, errorCode: result.errors[0].code, error: result.errors[0].message }
+6. CALL sceneStore.loadScene(result.sanitizedData)
+7. RETURN { success: true }
 ```
 
 ---
 
 ## 5. Sequence Diagrams
 
-### 5.1 File Import — Happy Path
+### 5.1 Happy Path — Valid JSON Import
 
 ```mermaid
 sequenceDiagram
-    actor User
-    participant Toolbar as Toolbar (UI)
-    participant ImportSvc as importService
-    participant Validator as jsonValidator
-    participant Sanitize as sanitize
-    participant SceneStore as sceneStore (Zustand)
+    participant User
+    participant Toolbar
+    participant importService
+    participant jsonValidator
+    participant sanitize
+    participant sceneStore
 
-    User->>Toolbar: Clicks "Import" → selects file
-    Toolbar->>ImportSvc: importFromFile(file)
-    ImportSvc->>ImportSvc: Check file.size ≤ 5 MB
-    ImportSvc->>ImportSvc: file.text() → rawText
-    ImportSvc->>Validator: validateProjectJson(rawText, size)
-    Validator->>Validator: checkFileSize()
-    Validator->>Validator: parseJsonSafely() — JSON.parse in try/catch
-    Validator->>Sanitize: checkPrototypePollution(parsed)
-    Validator->>Validator: checkDepth(parsed, 8)
-    Validator->>Validator: validateTopLevel(parsed)
-    Validator->>Validator: validateScene(parsed.scene)
-    loop each brick
-        Validator->>Validator: validateBrick(brick, index)
-        Validator->>Sanitize: sanitizeString(brick fields)
-    end
-    Validator-->>ImportSvc: ValidationResult { valid: true, sanitizedData }
-    ImportSvc-->>Toolbar: ImportResult { success: true, data }
-    Toolbar->>SceneStore: importProject(data)
-    SceneStore->>SceneStore: set({ bricks: data.scene.bricks })
-    SceneStore-->>Toolbar: State updated
-    Toolbar-->>User: Scene loaded ✓
+    User->>Toolbar: Click Import button
+    Toolbar->>Toolbar: Open file picker
+    User->>Toolbar: Select .json file
+    Toolbar->>importService: importFromFile(file)
+    importService->>importService: CHECK file.size <= 5MB
+    importService->>importService: readFileAsText(file)
+    importService->>importService: safeParseJson(text)
+    importService->>jsonValidator: validateProjectJson(parsed, size, mimeType)
+    jsonValidator->>jsonValidator: detectPrototypePollution()
+    jsonValidator->>jsonValidator: exceedsDepthLimit()
+    jsonValidator->>jsonValidator: validateTopLevel()
+    jsonValidator->>jsonValidator: validateBricks() [for each brick]
+    jsonValidator->>sanitize: deepSanitize(validatedData)
+    sanitize-->>jsonValidator: sanitizedData
+    jsonValidator-->>importService: { valid: true, sanitizedData }
+    importService->>sceneStore: loadScene(sanitizedData)
+    sceneStore-->>importService: void
+    importService-->>Toolbar: { success: true }
+    Toolbar->>User: Scene loaded (toast notification)
 ```
 
-### 5.2 File Import — Malicious Payload Rejection
+### 5.2 Error Path — Prototype Pollution Attack
 
 ```mermaid
 sequenceDiagram
-    actor Attacker
-    participant Toolbar as Toolbar (UI)
-    participant ImportSvc as importService
-    participant Validator as jsonValidator
-    participant Sanitize as sanitize
+    participant Attacker
+    participant importService
+    participant jsonValidator
+    participant sceneStore
 
-    Attacker->>Toolbar: Drops crafted JSON with __proto__ key
-    Toolbar->>ImportSvc: importFromFile(file)
-    ImportSvc->>Validator: validateProjectJson(rawText, size)
-    Validator->>Validator: parseJsonSafely() — JSON.parse succeeds
-    Validator->>Sanitize: checkPrototypePollution(parsed)
-    Sanitize-->>Validator: true (pollution detected)
-    Validator-->>ImportSvc: ValidationResult { valid: false, issues: [PROTOTYPE_POLLUTION] }
-    ImportSvc-->>Toolbar: ImportResult { success: false, errors: [PROTOTYPE_POLLUTION] }
-    Toolbar-->>Attacker: Error toast: "Invalid file format"
-    Note over Toolbar,Validator: SceneStore is never touched
+    Attacker->>importService: importFromFile(maliciousFile)
+    Note over importService: File contains {"__proto__": {"isAdmin": true}}
+    importService->>importService: readFileAsText()
+    importService->>importService: safeParseJson() → parsed object
+    importService->>jsonValidator: validateProjectJson(parsed, size, mimeType)
+    jsonValidator->>jsonValidator: detectPrototypePollution() → found '__proto__'
+    jsonValidator-->>importService: { valid: false, errors: [PROTOTYPE_POLLUTION] }
+    Note over sceneStore: sceneStore.loadScene() is NEVER called
+    importService-->>Attacker: { success: false, errorCode: 'PROTOTYPE_POLLUTION' }
 ```
 
-### 5.3 LocalStorage Restore — Validation on Hydration
+### 5.3 Error Path — JSON Bomb (Depth Limit)
 
 ```mermaid
 sequenceDiagram
-    participant App as App (mount)
-    participant PersistSvc as persistenceService
-    participant ImportSvc as importService
-    participant Validator as jsonValidator
-    participant SceneStore as sceneStore
+    participant Attacker
+    participant importService
+    participant jsonValidator
 
-    App->>PersistSvc: loadProject()
-    PersistSvc->>PersistSvc: localStorage.getItem('legobuilder-project')
-    PersistSvc->>ImportSvc: importFromLocalStorage(raw)
-    ImportSvc->>Validator: validateProjectJson(raw, byteSize)
-    alt Valid stored data
-        Validator-->>ImportSvc: { valid: true, sanitizedData }
-        ImportSvc-->>PersistSvc: { success: true, data }
-        PersistSvc->>SceneStore: hydrate(data)
-    else Corrupted / tampered data
-        Validator-->>ImportSvc: { valid: false, issues }
-        ImportSvc-->>PersistSvc: { success: false, errors }
-        PersistSvc->>SceneStore: reset to empty scene
-        PersistSvc->>PersistSvc: localStorage.removeItem('legobuilder-project')
-    end
+    Attacker->>importService: importFromFile(bombFile)
+    Note over importService: File contains deeply nested JSON (depth > 10)
+    importService->>importService: readFileAsText()
+    importService->>importService: safeParseJson() → parsed (may succeed)
+    importService->>jsonValidator: validateProjectJson(parsed, size, mimeType)
+    jsonValidator->>jsonValidator: exceedsDepthLimit(parsed, 0) → true at depth 11
+    jsonValidator-->>importService: { valid: false, errors: [DEPTH_LIMIT_EXCEEDED] }
+    importService-->>Attacker: { success: false, errorCode: 'DEPTH_LIMIT_EXCEEDED' }
+```
+
+### 5.4 Error Path — Invalid Brick Data
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant importService
+    participant jsonValidator
+    participant Toolbar
+
+    User->>importService: importFromFile(file)
+    Note over importService: File has brick with color: "javascript:alert(1)"
+    importService->>jsonValidator: validateProjectJson(parsed, size, mimeType)
+    jsonValidator->>jsonValidator: validateBrick(brick, 0)
+    Note over jsonValidator: HEX_COLOR_REGEX.test('javascript:alert(1)') → false
+    jsonValidator-->>importService: { valid: false, errors: [INVALID_COLOR at bricks[0].color] }
+    importService-->>Toolbar: { success: false, error: 'Invalid color at bricks[0].color' }
+    Toolbar->>User: Show ImportErrorToast
 ```
 
 ---
 
-## 6. Validation Algorithm Detail
+## 6. Error Handling Strategy
 
-### 6.1 Depth Check (Prototype Pollution & DoS Prevention)
+### 6.1 Error Code Registry
 
-```
-function checkDepth(value, maxDepth, currentDepth = 0, path = 'root'):
-  if currentDepth > maxDepth:
-    return DEPTH_LIMIT_EXCEEDED issue at path
-  if value is Array:
-    for each element at index i:
-      result = checkDepth(element, maxDepth, currentDepth + 1, path + '[' + i + ']')
-      if result: return result
-  if value is plain Object:
-    for each key in Object.keys(value):   ← NOT for..in (avoids prototype chain)
-      result = checkDepth(value[key], maxDepth, currentDepth + 1, path + '.' + key)
-      if result: return result
-  return null
-```
+| Code | Trigger | User Message | Scene Modified? |
+|------|---------|-------------|----------------|
+| `FILE_TOO_LARGE` | file.size > 5 MB | "File is too large. Maximum size is 5 MB." | No |
+| `INVALID_MIME_TYPE` | MIME not in allowlist | "File must be a JSON file." | No |
+| `INVALID_JSON_SYNTAX` | JSON.parse() throws | "File contains invalid JSON." | No |
+| `DEPTH_LIMIT_EXCEEDED` | Nesting depth > 10 | "File structure is too deeply nested." | No |
+| `PROTOTYPE_POLLUTION` | `__proto__` / `constructor` key | "File contains unsafe data and was rejected." | No |
+| `MISSING_REQUIRED_FIELD` | Required field absent | "File is missing required fields." | No |
+| `INVALID_FIELD_TYPE` | Wrong TypeScript type | "File contains invalid field types." | No |
+| `INVALID_SCHEMA_VERSION` | Major version mismatch | "File was created with an incompatible version of LegoBuilder." | No |
+| `BRICK_COUNT_EXCEEDED` | bricks.length > 500 | "File contains too many bricks (max 500)." | No |
+| `BRICK_VALIDATION_FAILED` | Per-brick validation fails | "File contains invalid brick data at position N." | No |
+| `INVALID_BRICK_ID` | UUID v4 regex fails | "File contains an invalid brick ID." | No |
+| `INVALID_CATALOG_ID` | Not in BRICK_CATALOG | "File references an unknown brick type." | No |
+| `INVALID_COLOR` | Hex color regex fails | "File contains an invalid color value." | No |
+| `INVALID_ROTATION` | Not in {0,90,180,270} | "File contains an invalid rotation value." | No |
+| `INVALID_POSITION` | Out of grid bounds | "File contains a brick outside the valid grid area." | No |
 
-### 6.2 Prototype Pollution Check
+**Invariant:** `sceneStore.loadScene()` is NEVER called when `valid === false`. The scene is never partially modified.
 
-```
-function checkPrototypePollution(obj, visited = new Set()):
-  if obj is null or not object: return false
-  if visited.has(obj): return false   ← circular reference guard
-  visited.add(obj)
-  for key in Object.keys(obj):
-    if key in ['__proto__', 'constructor', 'prototype']: return true
-    if typeof obj[key] === 'object':
-      if checkPrototypePollution(obj[key], visited): return true
-  return false
-```
+### 6.2 Fail-Fast vs. Collect-All Strategy
 
-### 6.3 Safe JSON Parse
-
-```
-function parseJsonSafely(text):
-  try:
-    data = JSON.parse(text)   ← standard browser JSON.parse, no eval
-    return { data }
-  catch SyntaxError as e:
-    return { error: { code: 'INVALID_JSON_SYNTAX', message: 'File is not valid JSON', ... } }
-```
-
-**Note:** `JSON.parse` is used exclusively. `eval()`, `new Function()`, and `setTimeout(string)` are **never** used in the import pipeline. ESLint rule `no-eval` is enforced.
-
-### 6.4 String Sanitization
-
-```
-function sanitizeString(value, maxLength = 256):
-  if typeof value !== 'string': return ''
-  // Remove HTML tags
-  cleaned = value.replace(/<[^>]*>/g, '')
-  // Remove control characters (0x00–0x1F, 0x7F)
-  cleaned = cleaned.replace(/[\x00-\x1F\x7F]/g, '')
-  // Truncate
-  return cleaned.slice(0, maxLength)
-```
+| Error Type | Strategy | Rationale |
+|---|---|---|
+| `FILE_TOO_LARGE` | Fail-fast | No point reading the file |
+| `INVALID_MIME_TYPE` | Fail-fast | No point parsing |
+| `INVALID_JSON_SYNTAX` | Fail-fast | Cannot proceed |
+| `DEPTH_LIMIT_EXCEEDED` | Fail-fast | DoS risk |
+| `PROTOTYPE_POLLUTION` | Fail-fast | Security critical |
+| Per-brick errors | Collect-all | Better UX: show all errors at once |
+| Top-level field errors | Collect-all | Better UX |
 
 ---
 
@@ -504,152 +458,197 @@ function sanitizeString(value, maxLength = 256):
 ### 7.1 Threat Model
 
 | Threat | Attack Vector | Mitigation |
-|---|---|---|
-| **Prototype Pollution** | `{"__proto__": {"isAdmin": true}}` | `checkPrototypePollution()` before any property access |
-| **JSON Bomb / DoS** | Deeply nested `{}` or huge arrays | Depth limit (8) + size limit (5 MB) + brick count limit (10,000) |
-| **XSS via string fields** | `{"projectName": "<script>alert(1)</script>"}` | `sanitizeString()` strips HTML tags before storage |
-| **Arbitrary Code Execution** | `eval()`-based parsers | `JSON.parse` only; ESLint `no-eval` rule enforced |
-| **Path Traversal** | Malicious `id` or `catalogId` values | UUID v4 regex + catalog allowlist validation |
-| **Integer Overflow** | Extreme numeric values | `Number.isFinite()` + range bounds checks |
-| **Circular Reference** | `{"a": <ref to self>}` | `JSON.parse` throws on circular refs; caught by `parseJsonSafely` |
-| **MIME Spoofing** | `.exe` renamed to `.json` | MIME type allowlist in `importFromDrop` |
-| **LocalStorage Tampering** | Attacker modifies stored JSON | Full re-validation on every `importFromLocalStorage` call |
+|--------|--------------|------------|
+| **Prototype Pollution** | `{"__proto__": {"isAdmin": true}}` | `detectPrototypePollution()` scans all keys before any property access; `structuredClone()` breaks prototype chain |
+| **JSON Bomb (DoS)** | Deeply nested `{"a":{"a":{...}}}` | `exceedsDepthLimit()` short-circuits at depth 10 |
+| **Large File DoS** | 500 MB JSON file | `file.size` check before `FileReader.readAsText()` |
+| **XSS via String Fields** | `"name": "<script>alert(1)</script>"` | `sanitizeString()` HTML-encodes all string fields; React's JSX escaping provides second layer |
+| **MIME Spoofing** | Rename `malware.exe` to `scene.json` | MIME type check + JSON.parse() will fail on non-JSON content |
+| **Arbitrary Code Execution** | `eval()`, `Function()`, `setTimeout(string)` | ESLint `no-eval`, `no-new-func`, `no-implied-eval` rules; `JSON.parse()` is the only parser |
+| **Brick Count DoS** | 1,000,000 bricks in array | `MAX_BRICK_COUNT = 500` check before per-brick iteration |
+| **Integer Overflow** | `position.x = 9007199254740992` | `Number.isFinite()` + grid bounds check |
+| **Unicode Injection** | Null bytes, RTL override chars | `sanitizeString()` strips control characters |
 
-### 7.2 No-Eval Guarantee
+### 7.2 ESLint Rules Added
 
-The following are **prohibited** in `importService.ts`, `jsonValidator.ts`, and `sanitize.ts`:
-- `eval()`
-- `new Function()`
-- `setTimeout(string, ...)`
-- `setInterval(string, ...)`
-- Dynamic `import()` with user-controlled paths
-- `document.write()`
-- `innerHTML` assignment with unsanitized data
-
-Enforcement: ESLint rules `no-eval`, `no-new-func`, `no-implied-eval` are added to `.eslintrc`.
-
-### 7.3 Content Security Policy
-
-The nginx config (`nginx.conf`) should include:
+```javascript
+// frontend/eslint.config.js additions
+{
+  rules: {
+    'no-eval': 'error',
+    'no-new-func': 'error',
+    'no-implied-eval': 'error',
+    'no-script-url': 'error',
+  }
+}
 ```
-Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none';
-```
-This prevents inline script execution even if XSS were somehow injected.
 
-### 7.4 Allowlist vs Denylist
+### 7.3 Why Not `ajv` or `zod`?
 
-Validation uses **allowlist** (whitelist) approach:
-- Only known `catalogId` values (from `BRICK_CATALOG`) are accepted.
-- Only `{0, 90, 180, 270}` are valid rotation values.
-- Only `#RRGGBB` hex strings are valid colors.
-- Only UUID v4 format is valid for `id` fields.
+| Option | Bundle Size | Control | Decision |
+|--------|------------|---------|----------|
+| Hand-rolled validator | ~2 KB | Full | ✅ Chosen |
+| `ajv` | ~30 KB gzipped | Medium | ❌ Too large |
+| `zod` | ~12 KB gzipped | High | ❌ Already have `zod` for export; could reuse |
 
-This is strictly safer than denylist approaches.
+**Note:** If `zod` is already a project dependency (used in `exportService.ts`), the team may choose to define a `ProjectJsonSchema` using `zod` instead of the hand-rolled validator. The interface contracts in this LLD remain the same regardless of the validation library used.
 
 ---
 
-## 8. Error Handling Strategy
+## 8. Performance Budget
 
-### 8.1 Fail-Fast Principle
-
-Validation short-circuits on critical errors:
-
-```
-1. FILE_TOO_LARGE       → return immediately, do not read file content
-2. INVALID_JSON_SYNTAX  → return immediately, do not traverse object
-3. DEPTH_LIMIT_EXCEEDED → return immediately, do not validate fields
-4. PROTOTYPE_POLLUTION  → return immediately, do not access any properties
-```
-
-For non-critical errors (field-level), validation continues to collect all issues.
-
-### 8.2 User-Facing Error Messages
-
-Error messages shown to users are **safe, generic, and non-leaking**:
-
-| Code | User Message |
-|---|---|
-| `FILE_TOO_LARGE` | "File is too large. Maximum size is 5 MB." |
-| `INVALID_JSON_SYNTAX` | "File is not a valid LegoBuilder project." |
-| `SCHEMA_VERSION_MISMATCH` | "This project was created with an incompatible version." |
-| `PROTOTYPE_POLLUTION` | "File contains invalid data and cannot be imported." |
-| `BRICK_COUNT_EXCEEDED` | "Project contains too many bricks (max 10,000)." |
-| Any other error | "Import failed. Please check the file and try again." |
-
-**No internal error details, stack traces, or file paths are exposed to the user.**
-
-### 8.3 Logging
-
-- In development (`import.meta.env.DEV`): full `ValidationIssue[]` logged to `console.warn`.
-- In production: no logging of validation details (prevents information leakage).
+| Operation | Target | Measurement |
+|-----------|--------|-------------|
+| `validateProjectJson()` for 500 bricks | ≤ 200 ms | `performance.now()` in unit test |
+| `deepSanitize()` for 500 bricks | ≤ 50 ms | `performance.now()` in unit test |
+| Total import pipeline (read + parse + validate + load) | ≤ 1 s | E2E test |
+| Bundle size increase | ≤ 8 KB gzipped | Vite bundle analyzer |
+| Memory overhead during validation | ≤ 10 MB | Chrome DevTools |
 
 ---
 
-## 9. Performance Targets
+## 9. Accessibility
 
-| Metric | Target | Measurement |
-|---|---|---|
-| Validation time for 1,000-brick file | ≤ 50 ms | Vitest benchmark |
-| Validation time for 10,000-brick file (max) | ≤ 200 ms | Vitest benchmark |
-| Memory overhead during validation | ≤ 2× file size | Chrome DevTools heap snapshot |
-| Bundle size increase (jsonValidator + sanitize) | ≤ 8 KB gzipped | Vite bundle analyzer |
+| Requirement | Implementation |
+|-------------|----------------|
+| Import error announced to screen readers | `ImportErrorToast` uses `role="alert"` and `aria-live="assertive"` |
+| Error message is descriptive | Each `ValidationErrorCode` maps to a human-readable message |
+| File input is keyboard-accessible | Native `<input type="file">` with `aria-label="Import scene JSON"` |
+| Loading state announced | `aria-busy="true"` on Toolbar Import button during import |
 
 ---
 
 ## 10. Test Case Mapping
 
-| Test ID | Description | Type | Expected Result |
-|---|---|---|---|
-| T-SEC-001-01 | Valid `.lbp` file with 100 bricks | Unit | `valid: true`, `sanitizedData` populated |
-| T-SEC-001-02 | File with `__proto__` key in JSON | Unit | `valid: false`, code `PROTOTYPE_POLLUTION` |
-| T-SEC-001-03 | File > 5 MB | Unit | `valid: false`, code `FILE_TOO_LARGE` |
-| T-SEC-001-04 | Malformed JSON (syntax error) | Unit | `valid: false`, code `INVALID_JSON_SYNTAX` |
-| T-SEC-001-05 | JSON with `<script>` in `projectName` | Unit | `valid: true`, `sanitizedData.projectName` has tags stripped |
-| T-SEC-001-06 | JSON with depth > 8 | Unit | `valid: false`, code `DEPTH_LIMIT_EXCEEDED` |
-| T-SEC-001-07 | JSON with unknown `catalogId` | Unit | `valid: false`, code `UNKNOWN_CATALOG_ID` |
-| T-SEC-001-08 | JSON with 10,001 bricks | Unit | `valid: false`, code `BRICK_COUNT_EXCEEDED` |
-| T-SEC-001-09 | JSON with `rotation.y: 45` (invalid) | Unit | `valid: false`, code `INVALID_ROTATION` |
-| T-SEC-001-10 | JSON with `color: "red"` (not hex) | Unit | `valid: false`, code `INVALID_COLOR` |
-| T-SEC-001-11 | LocalStorage tampered data | Unit | `valid: false`, store reset to empty scene |
-| T-SEC-001-12 | Drag-and-drop with wrong MIME type | Unit | `valid: false`, code `INVALID_MIME` |
-| T-SEC-001-13 | Valid file — sceneStore hydrated correctly | Integration | Zustand store contains expected bricks |
-| T-SEC-001-14 | Invalid file — sceneStore NOT modified | Integration | Zustand store unchanged after failed import |
+### 10.1 Unit Tests (`frontend/tests/unit/jsonValidator.test.ts`)
+
+| Test ID | Description | Input | Expected |
+|---------|-------------|-------|----------|
+| T-FE-SEC-001-01 | Valid JSON passes validation | Well-formed ProjectJson with 3 bricks | `{ valid: true, sanitizedData: {...} }` |
+| T-FE-SEC-001-02 | Prototype pollution rejected | `{"__proto__": {"x": 1}, ...}` | `{ valid: false, errors: [PROTOTYPE_POLLUTION] }` |
+| T-FE-SEC-001-03 | JSON bomb rejected | Object with depth 15 | `{ valid: false, errors: [DEPTH_LIMIT_EXCEEDED] }` |
+| T-FE-SEC-001-04 | Malicious color rejected | `bricks[0].color = "javascript:alert(1)"` | `{ valid: false, errors: [INVALID_COLOR] }` |
+| T-FE-SEC-001-05 | File too large rejected | `fileSizeBytes = 6 * 1024 * 1024` | `{ valid: false, errors: [FILE_TOO_LARGE] }` |
+| T-FE-SEC-001-06 | Invalid UUID rejected | `bricks[0].id = "not-a-uuid"` | `{ valid: false, errors: [INVALID_BRICK_ID] }` |
+| T-FE-SEC-001-07 | Unknown catalogId rejected | `bricks[0].catalogId = "unknown-type"` | `{ valid: false, errors: [INVALID_CATALOG_ID] }` |
+| T-FE-SEC-001-08 | Invalid rotation rejected | `bricks[0].rotation = 45` | `{ valid: false, errors: [INVALID_ROTATION] }` |
+| T-FE-SEC-001-09 | Out-of-bounds position rejected | `bricks[0].position.x = 999` | `{ valid: false, errors: [INVALID_POSITION] }` |
+| T-FE-SEC-001-10 | Brick count exceeded | `bricks.length = 501` | `{ valid: false, errors: [BRICK_COUNT_EXCEEDED] }` |
+| T-FE-SEC-001-11 | Missing required field | `{ version: '1.0.0' }` (no bricks) | `{ valid: false, errors: [MISSING_REQUIRED_FIELD] }` |
+| T-FE-SEC-001-12 | Invalid schema version | `version: '99.0.0'` | `{ valid: false, errors: [INVALID_SCHEMA_VERSION] }` |
+| T-FE-SEC-001-13 | sanitizedData is structuredClone | Verify `result.sanitizedData !== raw` | Deep equality but different reference |
+| T-FE-SEC-001-14 | HTML in name field is sanitized | `metadata.name = "<b>test</b>"` | `sanitizedData.metadata.name = "&lt;b&gt;test&lt;/b&gt;"` |
+| T-FE-SEC-001-15 | constructor key rejected | `{"constructor": {"name": "evil"}, ...}` | `{ valid: false, errors: [PROTOTYPE_POLLUTION] }` |
+
+### 10.2 Integration Tests (`frontend/tests/unit/importService.test.ts`)
+
+| Test ID | Description | Expected |
+|---------|-------------|----------|
+| T-FE-SEC-001-INT-01 | Valid file → sceneStore.loadScene() called | `loadScene` called with sanitizedData |
+| T-FE-SEC-001-INT-02 | Invalid file → sceneStore.loadScene() NOT called | `loadScene` never called |
+| T-FE-SEC-001-INT-03 | MIME type check | `.exe` file rejected with `INVALID_MIME_TYPE` |
+| T-FE-SEC-001-INT-04 | Invalid JSON syntax | `INVALID_JSON_SYNTAX` returned |
+
+### 10.3 E2E Tests (`frontend/tests/e2e/importSecurity.spec.ts`)
+
+| Test ID | Description | Expected |
+|---------|-------------|----------|
+| T-E2E-SEC-001-01 | Import valid JSON → scene loads | Scene contains imported bricks |
+| T-E2E-SEC-001-02 | Import malformed JSON → error toast | `data-testid="import-error-toast"` visible |
+| T-E2E-SEC-001-03 | Import oversized file → error toast | Error message mentions file size |
 
 ---
 
-## 11. Implementation Notes for Coding Agent
+## 11. File Map for Coding Agent
 
-1. **Do not use `ajv` or other JSON Schema libraries** — the validation is hand-rolled to avoid adding a large dependency and to maintain full control over error messages and behavior.
-2. **`JSON.parse` is the only JSON parser** — never use `eval`, `new Function`, or any third-party parser.
-3. **`Object.keys()` not `for...in`** — always use `Object.keys()` when iterating object properties to avoid prototype chain traversal.
-4. **Deep clone sanitized data** — use `structuredClone()` (available in modern browsers) to produce `sanitizedData`, ensuring no reference to the original parsed object.
-5. **ESLint rules to add** in `.eslintrc.cjs`:
-   ```json
-   "no-eval": "error",
-   "no-new-func": "error",
-   "no-implied-eval": "error"
-   ```
-6. **Test file location:** `frontend/src/engine/__tests__/jsonValidator.test.ts` and `frontend/src/services/__tests__/importService.test.ts`.
-7. **Vitest** is the test runner (already configured in `vitest.config.ts`).
+### New Files
 
----
+| File | Action | Description |
+|------|--------|-------------|
+| `frontend/src/utils/jsonValidator.ts` | CREATE | Pure validation engine |
+| `frontend/src/utils/sanitize.ts` | CREATE | String sanitization helpers |
+| `frontend/src/constants/security.ts` | CREATE | Security constants (MAX_FILE_SIZE_BYTES, etc.) |
+| `frontend/tests/unit/jsonValidator.test.ts` | CREATE | 15 unit tests for validator |
+| `frontend/tests/unit/importService.test.ts` | CREATE | 4 integration tests |
+| `frontend/tests/e2e/importSecurity.spec.ts` | CREATE | 3 E2E tests |
 
-## 12. Accessibility & UX
+### Modified Files
 
-- Import error messages are displayed in an ARIA `role="alert"` region so screen readers announce them immediately.
-- Error toast auto-dismisses after 8 seconds but can be dismissed manually.
-- The import button is disabled while validation is in progress (prevents double-submit).
+| File | Action | Change |
+|------|--------|--------|
+| `frontend/src/services/importService.ts` | MODIFY | Add `validateProjectJson()` call before `sceneStore.loadScene()` |
+| `frontend/eslint.config.js` | MODIFY | Add `no-eval`, `no-new-func`, `no-implied-eval`, `no-script-url` rules |
+| `frontend/src/types/project.ts` | MODIFY | Add `ValidationResult`, `ValidationError`, `ValidationErrorCode` types |
 
 ---
 
-## 13. Open Questions
+## 12. Implementation Notes for Coding Agent
 
-| # | Question | Owner | Priority |
-|---|---|---|---|
-| 1 | Should schema version `1.0.0` be the only supported version, or should we support a range? | Product | Medium |
-| 2 | Should warnings (e.g., `INVALID_TIMESTAMP`) block import or just be logged? | Product | Low |
-| 3 | Should we add a `schemaVersion` migration path for future format changes? | Architecture | Medium |
+1. **`detectPrototypePollution` must use `Object.keys()` not `for...in`** — `for...in` traverses the prototype chain and may miss injected keys in some environments. Use `Object.keys()` for own-property enumeration.
+
+2. **`exceedsDepthLimit` must handle circular references** — Use a `WeakSet` to track visited objects and avoid infinite recursion on circular JSON (though `JSON.parse()` cannot produce circular objects, defensive coding is required).
+
+3. **`structuredClone()` availability** — Available in all modern browsers (Chrome 98+, Firefox 94+, Safari 15.4+). No polyfill needed for the LegoBuilder target baseline.
+
+4. **`safeParseJson` must catch all exceptions** — `JSON.parse()` can throw `SyntaxError` but also `RangeError` on some engines for extremely large inputs. Use a broad `catch (e: unknown)` block.
+
+5. **`importService.ts` must never call `eval()`** — The ESLint rules will enforce this, but the coding agent should be aware that `JSON.parse()` is the only approved parsing mechanism.
+
+6. **Test file naming** — Unit tests for `jsonValidator.ts` go in `frontend/tests/unit/jsonValidator.test.ts` (not co-located with the source file) to follow the existing test structure.
+
+7. **`BRICK_CATALOG` import** — The validator imports `BRICK_CATALOG` from `frontend/src/constants/brickCatalog.ts`. Verify this module exports a `Map<string, BrickTypeDefinition>` or `Set<string>` of valid catalog IDs.
 
 ---
 
-*Generated by Spectra Design Agent — Gate 6a approval required before implementation.*
+## 13. Dependencies
+
+| Dependency | Type | Status | Notes |
+|------------|------|--------|-------|
+| `structuredClone` | Browser API | ✅ Available | Chrome 98+, no polyfill needed |
+| `FileReader` | Browser API | ✅ Available | Standard Web API |
+| `BRICK_CATALOG` | Internal | ✅ Exists | `frontend/src/constants/brickCatalog.ts` |
+| `sceneStore.loadScene()` | Internal | ✅ Exists | `frontend/src/stores/sceneStore.ts` |
+| No new npm packages | — | ✅ | Hand-rolled validator, no new deps |
+
+---
+
+## 14. Open Questions
+
+| ID | Question | Impact | Severity |
+|----|----------|--------|----------|
+| OQ-1 | Should `zod` be used instead of the hand-rolled validator, given it may already be a project dependency? | Affects `jsonValidator.ts` implementation approach | MEDIUM |
+| OQ-2 | What is the exact set of valid `catalogId` values in `BRICK_CATALOG`? | Affects `INVALID_CATALOG_ID` validation | HIGH |
+| OQ-3 | Should the `metadata.name` field allow Unicode characters (e.g., Japanese, Arabic)? | Affects `sanitizeString()` character allowlist | LOW |
+| OQ-4 | Should partial imports be allowed (skip invalid bricks, import valid ones)? | Affects fail-fast vs. collect-all strategy for brick errors | MEDIUM |
+| OQ-5 | Is `MAX_BRICK_COUNT = 500` the correct limit, or should it match the NFR-SCALE-001 limit? | Affects `BRICK_COUNT_EXCEEDED` threshold | LOW |
+
+---
+
+## 15. Alternatives Considered
+
+| Alternative | Reason Rejected |
+|-------------|----------------|
+| **`ajv` JSON Schema validator** | ~30 KB bundle increase; hand-rolled validator is sufficient and smaller |
+| **`zod` schema validation** | Already a potential dependency; could be used if confirmed in `package.json` |
+| **Server-side validation** | No backend in LegoBuilder; all validation must be client-side |
+| **Allowlist-only approach (no sanitization)** | Allowlist validation is the primary defense; sanitization is defense-in-depth |
+| **Reject on any unknown field** | Too strict; forward-compatible imports would break on minor version additions |
+
+---
+
+## 16. NFR Compliance Targets
+
+| NFR | Target | Verification |
+|-----|--------|-------------|
+| Validation latency (500 bricks) | ≤ 200 ms | Unit test with `performance.now()` |
+| Bundle size increase | ≤ 8 KB gzipped | Vite bundle analyzer in CI |
+| Zero `eval()` calls | 0 occurrences | ESLint `no-eval: error` |
+| Zero prototype pollution | 0 bypasses | Unit tests T-FE-SEC-001-02, T-FE-SEC-001-15 |
+| Scene never partially modified | Invariant | All error paths verified in integration tests |
+| All test cases pass | 100% | Vitest + Playwright CI |
+
+---
+
+*Created by Spectra Framework — design-agent*  
+*NFR-SEC-001 | Issue #32 | app-legobuilder-20260410*  
+*Gate: pending — awaiting Gate 6a human review*
