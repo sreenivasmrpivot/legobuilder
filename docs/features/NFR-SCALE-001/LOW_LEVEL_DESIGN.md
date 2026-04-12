@@ -2,468 +2,753 @@
 ## Validate Scene Supports Up to 500 Bricks Without Performance Degradation
 
 **FR-ID:** NFR-SCALE-001  
-**Issue:** [#30](https://github.com/sreenivasmrpivot/legobuilder/issues/30)  
+**Issue:** #30  
+**Status:** Draft — Pending Gate 6a Approval  
 **Author:** Spectra Design Agent  
-**Status:** Draft — Awaiting Gate 6a Human Review  
-**Dependencies:** NFR-PERF-001 (#27), FR-SCENE-002 (#7)  
+**Date:** 2026-04-12  
+**Dependencies:** NFR-PERF-001 (#27), FR-SCENE-002 (#7)
 
 ---
 
 ## 1. Overview
 
-This document defines the low-level design for validating that the LegoBuilder 3D scene can render and interact with up to 500 bricks without performance degradation. The validation is implemented as a **performance test suite** (`frontend/tests/performance/scalability.test.ts`) that programmatically places 100, 250, and 500 bricks via `sceneStore` actions, measures frame rate using `requestAnimationFrame` timestamps via Puppeteer/Chrome DevTools Protocol (CDP), and asserts heap memory stays below 200 MB at peak load.
+NFR-SCALE-001 mandates that the LegoBuilder 3D scene SHALL support up to **500 bricks** without performance degradation, validated by a performance test suite that programmatically places 100, 250, and 500 bricks and measures frame rate (≥60 FPS) and heap memory (<200 MB) at each tier.
 
-The key architectural enabler is **Three.js `InstancedMesh` batching** (FR-SCENE-002), which collapses N draw calls into a single GPU draw call per brick type, achieving O(1) GPU overhead regardless of brick count.
+This is a **non-functional requirement** — no new user-facing features are introduced. The deliverable is a **performance test suite** (`frontend/tests/performance/scalability.test.ts`) that validates the existing rendering pipeline (powered by Three.js `InstancedMesh` from FR-SCENE-002) meets the scalability thresholds under automated CI conditions.
+
+### 1.1 Scope
+
+| In Scope | Out of Scope |
+|---|---|
+| Performance test suite for 100/250/500 brick scenes | New rendering optimizations (owned by FR-SCENE-002) |
+| FPS measurement via `requestAnimationFrame` timestamps | UI interaction testing |
+| Heap memory measurement via Chrome DevTools Protocol | Server-side performance |
+| CI integration with build-fail on threshold miss | Load testing beyond 500 bricks |
+| Puppeteer-based browser automation | Visual regression testing |
+
+### 1.2 Key Enabler
+
+`InstancedMesh` batching (FR-SCENE-002) is the architectural foundation that makes linear scaling to 500 bricks feasible. NFR-SCALE-001 validates that this foundation holds under load — it does not implement the optimization itself.
 
 ---
 
-## 2. Component Architecture
+## 2. Architecture Overview
 
-### 2.1 Module Map
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CI Pipeline (GitHub Actions)                  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │              scalability.test.ts (Vitest + Puppeteer)    │   │
+│  │                                                          │   │
+│  │  ScalabilityTestHarness                                  │   │
+│  │  ├── BrickScenePopulator  ──► sceneStore.addBrick()      │   │
+│  │  ├── FPSMeter             ──► requestAnimationFrame      │   │
+│  │  └── HeapMonitor          ──► CDP Runtime.getHeapUsage   │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                          │                                       │
+│                          ▼                                       │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │              LegoBuilder App (Puppeteer Browser)         │   │
+│  │  ┌─────────────┐   ┌──────────────┐   ┌─────────────┐   │   │
+│  │  │  sceneStore │   │ InstancedMesh│   │  R3F Canvas │   │   │
+│  │  │  (Zustand)  │──►│  (Three.js)  │──►│  (WebGL)    │   │   │
+│  │  └─────────────┘   └──────────────┘   └─────────────┘   │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Component Architecture
+
+### 3.1 Module Map
 
 ```
 frontend/
-├── tests/
-│   └── performance/
-│       ├── scalability.test.ts          # Main performance test suite (NEW)
-│       ├── helpers/
-│       │   ├── brickFactory.ts          # Programmatic brick placement helper (NEW)
-│       │   ├── fpsProbe.ts              # rAF-based FPS measurement utility (NEW)
-│       │   └── memoryProbe.ts           # CDP heap snapshot utility (NEW)
-│       └── fixtures/
-│           └── scalabilityScenes.ts     # Pre-defined 100/250/500 brick layouts (NEW)
-src/
-├── stores/
-│   └── sceneStore.ts                   # Existing — placeBrick / removeBrick actions
-├── engine/
-│   └── instancedMeshManager.ts         # Existing (FR-SCENE-002) — InstancedMesh pool
-├── utils/
-│   └── performanceMonitor.ts           # Existing scaffold — FPS / frame time tracking
+└── tests/
+    └── performance/
+        ├── scalability.test.ts          # Main test suite (Vitest)
+        ├── helpers/
+        │   ├── BrickScenePopulator.ts   # Programmatic brick placement
+        │   ├── FPSMeter.ts              # requestAnimationFrame FPS measurement
+        │   ├── HeapMonitor.ts           # CDP heap memory measurement
+        │   └── ScalabilityThresholds.ts # Threshold constants
+        └── fixtures/
+            └── brickFixtures.ts         # Deterministic brick position data
 ```
 
-### 2.2 Dependency Graph
+### 3.2 Component Responsibilities
 
+#### `scalability.test.ts` — Test Orchestrator
+
+```typescript
+// Responsibilities:
+// - Launches Puppeteer browser with CDP enabled
+// - Runs 3 test scenarios: 100, 250, 500 bricks
+// - Asserts FPS >= 60 and heap < 200MB for each scenario
+// - Fails CI build if any threshold is missed
+// - Cleans up browser resources after each test
+
+describe('NFR-SCALE-001: Scene Scalability', () => {
+  let browser: Browser;
+  let page: Page;
+  let cdpSession: CDPSession;
+
+  beforeAll(async () => {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--enable-gpu']
+    });
+  });
+
+  afterAll(async () => {
+    await browser.close();
+  });
+
+  beforeEach(async () => {
+    page = await browser.newPage();
+    cdpSession = await page.target().createCDPSession();
+    await page.goto('http://localhost:5173');
+    await page.waitForSelector('[data-testid="scene-canvas"]');
+  });
+
+  afterEach(async () => {
+    await cdpSession.detach();
+    await page.close();
+  });
+
+  test.each([
+    { brickCount: 100,  label: 'T-PERF-SCALE-001-01' },
+    { brickCount: 250,  label: 'T-PERF-SCALE-001-01' },
+    { brickCount: 500,  label: 'T-PERF-SCALE-001-02' },
+  ])('$label: $brickCount bricks — FPS >= 60 and heap < 200MB', async ({ brickCount }) => {
+    // 1. Populate scene
+    await BrickScenePopulator.populate(page, brickCount);
+
+    // 2. Allow render loop to stabilize
+    await page.waitForTimeout(STABILIZATION_DELAY_MS);
+
+    // 3. Measure FPS
+    const fps = await FPSMeter.measure(page, MEASUREMENT_WINDOW_MS);
+
+    // 4. Measure heap
+    const heapMB = await HeapMonitor.measure(cdpSession);
+
+    // 5. Assert thresholds
+    expect(fps).toBeGreaterThanOrEqual(THRESHOLDS.MIN_FPS);
+    expect(heapMB).toBeLessThan(THRESHOLDS.MAX_HEAP_MB);
+  });
+});
 ```
-scalability.test.ts
-  ├── brickFactory.ts  ──→  sceneStore (placeBrick action)
-  ├── fpsProbe.ts      ──→  Puppeteer page.evaluate() + rAF timestamps
-  ├── memoryProbe.ts   ──→  CDP Runtime.getHeapUsage
-  └── scalabilityScenes.ts  (static data — no runtime deps)
 
-sceneStore.placeBrick
-  └── instancedMeshManager.addInstance()  ──→  Three.js InstancedMesh
+#### `BrickScenePopulator.ts` — Programmatic Brick Placement
+
+```typescript
+// Responsibilities:
+// - Injects brick placement commands directly into sceneStore
+//   via page.evaluate() — no UI interaction required
+// - Uses deterministic grid positions to avoid collision detection overhead
+// - Supports incremental population (add N more bricks to existing scene)
+
+export class BrickScenePopulator {
+  /**
+   * Populate the scene with `count` bricks via sceneStore.addBrick().
+   * Bricks are placed on a deterministic grid: x = i % GRID_WIDTH,
+   * z = Math.floor(i / GRID_WIDTH), y = 0 (ground plane).
+   */
+  static async populate(page: Page, count: number): Promise<void> {
+    await page.evaluate((brickCount: number) => {
+      const store = (window as any).__sceneStore;
+      if (!store) throw new Error('sceneStore not exposed on window');
+
+      const GRID_WIDTH = 25; // 25 × 20 = 500 max
+      for (let i = 0; i < brickCount; i++) {
+        store.getState().addBrick({
+          id: `perf-brick-${i}`,
+          type: '2x4',
+          color: '#FF0000',
+          position: {
+            x: (i % GRID_WIDTH) * 2,
+            y: 0,
+            z: Math.floor(i / GRID_WIDTH) * 2,
+          },
+          rotation: { x: 0, y: 0, z: 0 },
+        });
+      }
+    }, count);
+  }
+
+  /**
+   * Clear all performance bricks from the scene.
+   */
+  static async clear(page: Page): Promise<void> {
+    await page.evaluate(() => {
+      const store = (window as any).__sceneStore;
+      store.getState().clearScene();
+    });
+  }
+}
 ```
 
-### 2.3 Test Runner Integration
+#### `FPSMeter.ts` — Frame Rate Measurement
 
-| Tool | Role |
-|------|------|
-| **Vitest** | Unit/integration test runner for store-level assertions |
-| **Puppeteer** | Headless Chrome driver for FPS and memory measurement |
-| **Chrome DevTools Protocol (CDP)** | `Runtime.getHeapUsage`, `Performance.getMetrics` |
-| **@vitest/coverage-v8** | Coverage instrumentation (NFR-MAINT-001) |
+```typescript
+// Responsibilities:
+// - Injects a requestAnimationFrame loop into the browser page
+// - Collects frame timestamps over a measurement window
+// - Returns the average FPS over the window
+// - Handles edge cases: zero frames, very short windows
 
-The performance tests run in a **separate Vitest project** (`vitest.perf.config.ts`) to isolate them from the unit test suite and avoid inflating coverage numbers with performance scaffolding.
+export class FPSMeter {
+  /**
+   * Measure average FPS over `windowMs` milliseconds.
+   * Uses requestAnimationFrame timestamps for accuracy.
+   * Returns average FPS as a number.
+   */
+  static async measure(page: Page, windowMs: number): Promise<number> {
+    return page.evaluate((durationMs: number): Promise<number> => {
+      return new Promise((resolve) => {
+        const timestamps: number[] = [];
+        let rafId: number;
+        const startTime = performance.now();
+
+        function frame(ts: number) {
+          timestamps.push(ts);
+          if (ts - startTime < durationMs) {
+            rafId = requestAnimationFrame(frame);
+          } else {
+            cancelAnimationFrame(rafId);
+            if (timestamps.length < 2) {
+              resolve(0);
+              return;
+            }
+            const elapsed = timestamps[timestamps.length - 1] - timestamps[0];
+            const fps = ((timestamps.length - 1) / elapsed) * 1000;
+            resolve(fps);
+          }
+        }
+
+        requestAnimationFrame(frame);
+      });
+    }, windowMs);
+  }
+}
+```
+
+#### `HeapMonitor.ts` — Memory Measurement
+
+```typescript
+// Responsibilities:
+// - Uses Chrome DevTools Protocol (CDP) Runtime.getHeapUsage
+// - Returns used heap size in megabytes
+// - Triggers GC before measurement for deterministic results
+
+export class HeapMonitor {
+  /**
+   * Measure current JS heap usage in MB.
+   * Triggers a GC cycle first for deterministic measurement.
+   */
+  static async measure(session: CDPSession): Promise<number> {
+    // Force GC to get a clean heap snapshot
+    await session.send('HeapProfiler.collectGarbage');
+
+    const { usedSize } = await session.send('Runtime.getHeapUsage');
+    return usedSize / (1024 * 1024); // bytes → MB
+  }
+}
+```
+
+#### `ScalabilityThresholds.ts` — Threshold Constants
+
+```typescript
+export const THRESHOLDS = {
+  /** Minimum acceptable frame rate in frames per second */
+  MIN_FPS: 60,
+
+  /** Maximum acceptable JS heap usage in megabytes at 500 bricks */
+  MAX_HEAP_MB: 200,
+} as const;
+
+/** Milliseconds to wait after brick population before measuring */
+export const STABILIZATION_DELAY_MS = 500;
+
+/** Milliseconds over which to collect FPS samples */
+export const MEASUREMENT_WINDOW_MS = 2000;
+
+/** Brick counts to test */
+export const BRICK_COUNTS = [100, 250, 500] as const;
+export type BrickCount = typeof BRICK_COUNTS[number];
+```
 
 ---
 
-## 3. Data Models
+## 4. Data Models
 
-### 3.1 Brick Placement Input
+### 4.1 Brick Entity (from sceneStore — read-only for this NFR)
 
 ```typescript
-// Reuses existing Brick type from src/types/brick.ts
 interface Brick {
-  id: string;           // UUID
-  type: BrickType;      // e.g. '2x4', '1x2', '2x2'
-  position: Vector3;    // { x, y, z } in grid units
-  rotation: number;     // 0 | 90 | 180 | 270 degrees
-  color: BrickColor;    // hex string from catalog
+  id: string;           // Unique identifier, e.g. 'perf-brick-42'
+  type: BrickType;      // '1x1' | '1x2' | '2x2' | '2x4' | '2x6' | '2x8'
+  color: string;        // Hex color string, e.g. '#FF0000'
+  position: {
+    x: number;          // World-space X coordinate
+    y: number;          // World-space Y coordinate (height)
+    z: number;          // World-space Z coordinate
+  };
+  rotation: {
+    x: number;          // Rotation in radians
+    y: number;
+    z: number;
+  };
 }
 ```
 
-### 3.2 FPS Sample Record
+### 4.2 Performance Measurement Result
 
 ```typescript
-interface FpsSample {
+interface ScalabilityResult {
   brickCount: number;       // 100 | 250 | 500
-  samples: number[];        // Array of per-frame FPS values (5-second window)
-  p50Fps: number;           // 50th percentile FPS
-  p95Fps: number;           // 95th percentile FPS (worst-case)
-  minFps: number;           // Absolute minimum observed
-  durationMs: number;       // Total measurement window in ms
+  averageFPS: number;       // Measured average FPS over MEASUREMENT_WINDOW_MS
+  heapUsedMB: number;       // Measured heap usage in MB after GC
+  fpsPass: boolean;         // averageFPS >= THRESHOLDS.MIN_FPS
+  heapPass: boolean;        // heapUsedMB < THRESHOLDS.MAX_HEAP_MB
+  pass: boolean;            // fpsPass && heapPass
+  timestamp: string;        // ISO 8601 timestamp of measurement
 }
 ```
 
-### 3.3 Memory Sample Record
+### 4.3 Test Configuration
 
 ```typescript
-interface MemorySample {
-  brickCount: number;       // 100 | 250 | 500
-  heapUsedMB: number;       // JS heap used (MB) via CDP Runtime.getHeapUsage
-  heapTotalMB: number;      // JS heap total allocated (MB)
-  gpuMemoryEstimateMB?: number; // Optional: from Performance.getMetrics
+interface ScalabilityTestConfig {
+  brickCounts: readonly number[];   // [100, 250, 500]
+  stabilizationDelayMs: number;     // 500
+  measurementWindowMs: number;      // 2000
+  thresholds: {
+    minFPS: number;                 // 60
+    maxHeapMB: number;              // 200
+  };
+  puppeteerOptions: {
+    headless: boolean;              // true in CI
+    args: string[];                 // ['--no-sandbox', '--enable-gpu']
+  };
 }
 ```
-
-### 3.4 Scalability Test Result
-
-```typescript
-interface ScalabilityTestResult {
-  timestamp: string;        // ISO 8601
-  gitSha: string;           // Commit SHA for traceability
-  fps: FpsSample[];         // One entry per brick count tier
-  memory: MemorySample[];   // One entry per brick count tier
-  passed: boolean;          // true if ALL thresholds met
-  failures: string[];       // Human-readable failure messages
-}
-```
-
----
-
-## 4. API / Interface Specifications
-
-> This is a pure frontend NFR — there are no HTTP API endpoints. The "API" is the internal TypeScript interface between the test harness and the application stores/engine.
-
-### 4.1 `brickFactory.ts` — Public Interface
-
-```typescript
-/**
- * Programmatically places `count` bricks into the scene via sceneStore.
- * Bricks are placed in a grid pattern to avoid collision failures.
- * @param count  Number of bricks to place (100 | 250 | 500)
- * @param store  Zustand sceneStore instance (injected for testability)
- */
-export async function populateScene(
-  count: number,
-  store: SceneStore
-): Promise<void>;
-
-/**
- * Clears all bricks from the scene and resets the store.
- */
-export async function clearScene(store: SceneStore): Promise<void>;
-```
-
-### 4.2 `fpsProbe.ts` — Public Interface
-
-```typescript
-/**
- * Measures FPS over a `durationMs` window using requestAnimationFrame.
- * Runs inside the browser context via Puppeteer page.evaluate().
- * @param page       Puppeteer Page instance
- * @param durationMs Measurement window (default: 5000ms)
- * @returns          FpsSample with p50, p95, min FPS
- */
-export async function measureFps(
-  page: Page,
-  durationMs?: number
-): Promise<FpsSample>;
-```
-
-### 4.3 `memoryProbe.ts` — Public Interface
-
-```typescript
-/**
- * Reads JS heap usage via Chrome DevTools Protocol.
- * Requires CDP session to be attached to the Puppeteer page.
- * @param page  Puppeteer Page instance
- * @returns     MemorySample with heapUsedMB and heapTotalMB
- */
-export async function measureHeap(
-  page: Page
-): Promise<MemorySample>;
-```
-
-### 4.4 `sceneStore` Actions Used
-
-| Action | Signature | Purpose |
-|--------|-----------|---------|
-| `placeBrick` | `(brick: Brick) => void` | Add a brick to the scene |
-| `removeBrick` | `(id: string) => void` | Remove a brick by ID |
-| `clearScene` | `() => void` | Reset scene to empty state |
-| `getBricks` | `() => Brick[]` | Read current brick list |
 
 ---
 
 ## 5. Sequence Diagrams
 
-### 5.1 Performance Test Execution Flow
-
-```mermaid
-sequenceDiagram
-    participant CI as CI Runner (GitHub Actions)
-    participant Vitest as Vitest (perf config)
-    participant Test as scalability.test.ts
-    participant Factory as brickFactory.ts
-    participant Store as sceneStore
-    participant Engine as instancedMeshManager
-    participant Puppeteer as Puppeteer (headless Chrome)
-    participant CDP as Chrome DevTools Protocol
-
-    CI->>Vitest: npx vitest run --config vitest.perf.config.ts
-    Vitest->>Test: execute test suite
-
-    loop For each tier: [100, 250, 500]
-        Test->>Factory: populateScene(count, store)
-        Factory->>Store: placeBrick(brick) × count
-        Store->>Engine: addInstance(brick)
-        Engine-->>Store: InstancedMesh updated
-        Store-->>Factory: done
-        Factory-->>Test: scene populated
-
-        Test->>Puppeteer: page.evaluate(measureFps, 5000)
-        Puppeteer->>Puppeteer: rAF loop × 5s
-        Puppeteer-->>Test: FpsSample { p50, p95, min }
-
-        Test->>CDP: Runtime.getHeapUsage
-        CDP-->>Test: { usedSize, totalSize }
-
-        Test->>Test: assert p50Fps >= 60
-        Test->>Test: assert heapUsedMB < 200
-
-        Test->>Factory: clearScene(store)
-    end
-
-    Test-->>Vitest: PASS / FAIL
-    Vitest-->>CI: exit 0 / exit 1
-```
-
-### 5.2 InstancedMesh Scaling Path (FR-SCENE-002 Integration)
-
-```mermaid
-sequenceDiagram
-    participant Store as sceneStore
-    participant Manager as instancedMeshManager
-    participant Three as Three.js Renderer
-    participant GPU as GPU
-
-    Store->>Manager: addInstance(brick)
-    Manager->>Manager: find or create InstancedMesh for brick.type
-    Manager->>Manager: setMatrixAt(index, matrix)
-    Manager->>Manager: instancedMesh.instanceMatrix.needsUpdate = true
-    Manager-->>Three: single draw call per brick type
-    Three-->>GPU: 1 draw call (regardless of N instances)
-    GPU-->>Three: rendered frame
-    Note over Manager,GPU: O(1) GPU overhead — N bricks = 1 draw call per type
-```
-
-### 5.3 CI Failure & Remediation Flow
+### 5.1 Single Brick-Count Test Scenario
 
 ```mermaid
 sequenceDiagram
     participant CI as GitHub Actions
-    participant Vitest as Vitest (perf)
+    participant Vitest as Vitest Runner
     participant Test as scalability.test.ts
-    participant Dev as Developer
+    participant Puppeteer as Puppeteer Browser
+    participant App as LegoBuilder App
+    participant Store as sceneStore (Zustand)
+    participant RAF as requestAnimationFrame
+    participant CDP as Chrome DevTools Protocol
 
-    CI->>Vitest: run performance suite
-    Vitest->>Test: execute
-    Test-->>Vitest: FAIL (p50Fps=45 at 500 bricks)
-    Vitest-->>CI: exit 1 + failure report
-    CI-->>Dev: PR check fails — "FPS below 60 at 500 bricks"
+    CI->>Vitest: vitest run tests/performance/scalability.test.ts
+    Vitest->>Test: execute test suite
 
-    Dev->>Dev: profile with Chrome DevTools
-    Dev->>Dev: identify non-instanced geometry or missing batching
-    Dev->>Dev: fix instancedMeshManager or sceneStore
-    Dev->>CI: push fix
-    CI->>Vitest: re-run performance suite
-    Vitest->>Test: execute
+    Test->>Puppeteer: launch({ headless: true, args: [...] })
+    Puppeteer-->>Test: browser instance
+
+    Test->>Puppeteer: newPage()
+    Puppeteer-->>Test: page
+
+    Test->>Puppeteer: page.target().createCDPSession()
+    Puppeteer-->>Test: cdpSession
+
+    Test->>App: page.goto('http://localhost:5173')
+    App-->>Test: page loaded
+
+    Test->>App: page.waitForSelector('[data-testid="scene-canvas"]')
+    App-->>Test: canvas ready
+
+    Note over Test,Store: Phase 1 — Populate Scene
+    Test->>Puppeteer: page.evaluate(BrickScenePopulator.populate, 500)
+    Puppeteer->>Store: sceneStore.addBrick() × 500
+    Store->>App: InstancedMesh.setMatrixAt() × 500
+    App-->>Puppeteer: scene updated
+    Puppeteer-->>Test: population complete
+
+    Note over Test,RAF: Phase 2 — Stabilize
+    Test->>Test: waitForTimeout(500ms)
+
+    Note over Test,RAF: Phase 3 — Measure FPS
+    Test->>Puppeteer: page.evaluate(FPSMeter.measure, 2000ms)
+    Puppeteer->>RAF: requestAnimationFrame loop (2000ms)
+    RAF-->>Puppeteer: frame timestamps[]
+    Puppeteer-->>Test: averageFPS = 62.4
+
+    Note over Test,CDP: Phase 4 — Measure Heap
+    Test->>CDP: HeapProfiler.collectGarbage
+    CDP-->>Test: GC complete
+    Test->>CDP: Runtime.getHeapUsage
+    CDP-->>Test: usedSize = 145MB
+
+    Note over Test: Phase 5 — Assert
+    Test->>Test: expect(62.4).toBeGreaterThanOrEqual(60) ✓
+    Test->>Test: expect(145).toBeLessThan(200) ✓
+
     Test-->>Vitest: PASS
     Vitest-->>CI: exit 0
 ```
 
+### 5.2 CI Failure Path (Threshold Missed)
+
+```mermaid
+sequenceDiagram
+    participant CI as GitHub Actions
+    participant Vitest as Vitest Runner
+    participant Test as scalability.test.ts
+    participant Puppeteer as Puppeteer Browser
+
+    CI->>Vitest: vitest run tests/performance/scalability.test.ts
+    Vitest->>Test: execute test suite
+
+    Test->>Puppeteer: populate 500 bricks
+    Puppeteer-->>Test: population complete
+
+    Test->>Puppeteer: measure FPS
+    Puppeteer-->>Test: averageFPS = 45.2
+
+    Test->>Test: expect(45.2).toBeGreaterThanOrEqual(60) ✗
+    Test-->>Vitest: FAIL — FPS 45.2 < threshold 60
+
+    Vitest-->>CI: exit 1 (build fails)
+    CI->>CI: mark commit as failed
+    CI->>CI: block PR merge
+```
+
+### 5.3 Full CI Pipeline Integration
+
+```mermaid
+sequenceDiagram
+    participant PR as Pull Request
+    participant CI as GitHub Actions
+    participant Unit as Unit Tests (Vitest)
+    participant Perf as Performance Tests (Puppeteer)
+    participant Report as Test Report Artifact
+
+    PR->>CI: push / pull_request event
+    CI->>CI: start 'scalability-test' job
+    CI->>CI: npm run build (Vite)
+    CI->>CI: npx serve dist -p 5173 &
+    CI->>Unit: vitest run (unit + component tests)
+    Unit-->>CI: pass
+    CI->>Perf: vitest run tests/performance/scalability.test.ts
+    Perf-->>CI: results (pass/fail per brick count)
+    CI->>Report: upload scalability-report.json (always)
+    alt All thresholds met
+        CI-->>PR: ✅ scalability-test passed
+    else Any threshold missed
+        CI-->>PR: ❌ scalability-test failed — blocks merge
+    end
+```
+
 ---
 
-## 6. Performance Thresholds & Acceptance Criteria
+## 6. API / Interface Contracts
 
-| Brick Count | FPS Threshold | Memory Threshold | Test Case |
-|-------------|--------------|-----------------|----------|
-| 100 bricks | p50 ≥ 60 FPS | heap < 200 MB | T-PERF-SCALE-001-01 |
-| 250 bricks | p50 ≥ 60 FPS | heap < 200 MB | T-PERF-SCALE-001-01 |
-| 500 bricks | p50 ≥ 60 FPS | heap < 200 MB | T-PERF-SCALE-001-02 |
+### 6.1 `window.__sceneStore` Exposure
 
-**Measurement methodology:**
-- FPS measured over a **5-second rAF window** after scene stabilization (500ms settle delay post-placement)
-- p50 (median) FPS used as the primary metric to filter transient spikes
-- p95 FPS logged for trend analysis but not a hard gate
-- Heap measured via `Runtime.getHeapUsage` after GC hint (`Runtime.collectGarbage`)
-
-**CI gate:** Any threshold miss → `exit 1` → PR check fails → merge blocked.
-
----
-
-## 7. Vitest Performance Config (`vitest.perf.config.ts`)
+The test harness requires `sceneStore` to be accessible from `page.evaluate()`. This is achieved by exposing the store on `window` in development/test mode only:
 
 ```typescript
+// frontend/src/main.tsx (test/dev mode only)
+if (import.meta.env.MODE !== 'production') {
+  import('./stores/sceneStore').then(({ useSceneStore }) => {
+    (window as any).__sceneStore = useSceneStore;
+  });
+}
+```
+
+**Security note:** This exposure is gated on `MODE !== 'production'`. The production build never exposes internal store state on `window`.
+
+### 6.2 `sceneStore.addBrick()` Contract
+
+```typescript
+// Expected interface (from FR-SCENE-002 LLD)
+interface SceneStore {
+  bricks: Brick[];
+  addBrick: (brick: Brick) => void;
+  removeBrick: (id: string) => void;
+  clearScene: () => void;
+  updateBrick: (id: string, updates: Partial<Brick>) => void;
+}
+```
+
+### 6.3 `data-testid="scene-canvas"` Selector
+
+The R3F `<Canvas>` element must expose `data-testid="scene-canvas"` for Puppeteer to detect scene readiness:
+
+```tsx
+// frontend/src/components/SceneCanvas.tsx
+<Canvas data-testid="scene-canvas" ...>
+  {/* scene content */}
+</Canvas>
+```
+
+### 6.4 CDP Session Methods Used
+
+| CDP Method | Purpose | Parameters |
+|---|---|---|
+| `HeapProfiler.collectGarbage` | Force GC before heap measurement | none |
+| `Runtime.getHeapUsage` | Get current heap usage | none → `{ usedSize: number, totalSize: number }` |
+
+---
+
+## 7. CI Integration Design
+
+### 7.1 GitHub Actions Job
+
+```yaml
+# .github/workflows/ci.yml (addition)
+scalability-test:
+  name: Scalability Test (NFR-SCALE-001)
+  runs-on: ubuntu-latest
+  needs: [build]
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install dependencies
+      working-directory: frontend
+      run: npm ci
+
+    - name: Install Puppeteer browsers
+      working-directory: frontend
+      run: npx puppeteer browsers install chrome
+
+    - name: Build application
+      working-directory: frontend
+      run: npm run build
+
+    - name: Serve built application
+      working-directory: frontend
+      run: npx serve dist -p 5173 &
+
+    - name: Wait for server
+      run: npx wait-on http://localhost:5173 --timeout 30000
+
+    - name: Run scalability tests
+      working-directory: frontend
+      run: npx vitest run tests/performance/scalability.test.ts --reporter=verbose
+      env:
+        PUPPETEER_HEADLESS: 'true'
+
+    - name: Upload scalability report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: scalability-report
+        path: frontend/tests/performance/scalability-report.json
+        retention-days: 30
+```
+
+### 7.2 Vitest Configuration for Performance Tests
+
+```typescript
+// frontend/vitest.performance.config.ts
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    name: 'performance',
-    include: ['frontend/tests/performance/**/*.test.ts'],
-    exclude: ['frontend/tests/unit/**', 'frontend/tests/e2e/**'],
-    environment: 'node',          // Puppeteer runs in Node context
-    testTimeout: 120_000,         // 2 min per test (browser startup + 3 tiers)
-    hookTimeout: 30_000,
+    include: ['tests/performance/**/*.test.ts'],
+    testTimeout: 120_000,   // 2 minutes per test (500 bricks + measurement)
+    hookTimeout: 30_000,    // 30 seconds for browser launch
     reporters: ['verbose', 'json'],
-    outputFile: 'reports/performance-results.json',
-    // No coverage — performance tests are not coverage targets
-    coverage: { enabled: false },
-    // Sequential execution — browser sessions cannot be parallelized safely
-    pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    outputFile: 'tests/performance/scalability-report.json',
+    pool: 'forks',          // Isolate Puppeteer process from Vitest worker
+    poolOptions: {
+      forks: {
+        singleFork: true,   // One browser instance for all tests
+      },
+    },
   },
 });
 ```
 
+### 7.3 Required npm Dependencies
+
+| Package | Version | Purpose | Dev-only |
+|---|---|---|---|
+| `puppeteer` | `^22.0.0` | Browser automation + CDP | ✅ |
+| `serve` | `^14.0.0` | Static file server for built app | ✅ |
+| `wait-on` | `^7.0.0` | Wait for server readiness in CI | ✅ |
+
+All are `devDependencies` — zero production bundle impact.
+
 ---
 
-## 8. GitHub Actions CI Integration
+## 8. Error Handling Strategy
 
-```yaml
-# .github/workflows/performance.yml  (NEW)
-name: Performance Tests
+### 8.1 Test-Level Error Handling
 
-on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
+| Error Condition | Detection | Handling |
+|---|---|---|
+| App fails to load | `page.waitForSelector` timeout | Test fails with descriptive error: `"Scene canvas not found — app may have crashed"` |
+| `__sceneStore` not exposed | `page.evaluate` throws | Test fails with: `"sceneStore not exposed on window — check main.tsx test mode guard"` |
+| `addBrick` throws | `page.evaluate` rejects | Test fails with the original error message from the store |
+| CDP session fails | `session.send` rejects | Test fails with CDP error; browser is closed in `afterEach` |
+| FPS measurement returns 0 | `timestamps.length < 2` | FPSMeter returns 0; test fails `expect(0).toBeGreaterThanOrEqual(60)` |
+| Browser crash | Puppeteer throws | `afterAll` closes browser; test suite fails |
 
-jobs:
-  scalability:
-    name: Scalability — 100/250/500 Bricks
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+### 8.2 Resource Cleanup
 
-    steps:
-      - uses: actions/checkout@v4
+```typescript
+// Guaranteed cleanup via afterEach / afterAll
+afterEach(async () => {
+  try { await cdpSession.detach(); } catch { /* already detached */ }
+  try { await page.close(); } catch { /* already closed */ }
+});
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-        working-directory: frontend
-
-      - name: Install Puppeteer browsers
-        run: npx puppeteer browsers install chrome
-        working-directory: frontend
-
-      - name: Run scalability tests
-        run: npx vitest run --config vitest.perf.config.ts
-        working-directory: frontend
-        env:
-          PUPPETEER_HEADLESS: 'true'
-          CI: 'true'
-
-      - name: Upload performance report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: performance-report-${{ github.sha }}
-          path: frontend/reports/performance-results.json
-          retention-days: 30
+afterAll(async () => {
+  try { await browser.close(); } catch { /* already closed */ }
+});
 ```
 
-**Makefile target:**
-```makefile
-perf-test:
-	cd frontend && npx vitest run --config vitest.perf.config.ts
-```
+### 8.3 Flakiness Mitigation
+
+| Risk | Mitigation |
+|---|---|
+| GPU unavailable in CI | Use `--enable-gpu` + `--use-gl=swiftshader` Chromium flags for software rendering fallback |
+| FPS variance between runs | Measure over 2000ms window (≥120 frames at 60 FPS) for statistical stability |
+| Heap measurement timing | Force GC via CDP before measurement; wait 500ms stabilization delay |
+| Port conflicts | Use `wait-on` to confirm server is ready before test starts |
+| Puppeteer version drift | Pin `puppeteer` version in `package-lock.json` |
 
 ---
 
-## 9. Error Handling Strategy
+## 9. Security Considerations
 
-| Failure Mode | Detection | Response |
-|-------------|-----------|----------|
-| Browser launch failure | Puppeteer throws on `launch()` | `beforeAll` hook fails → entire suite skipped with clear error |
-| Scene population timeout | `populateScene` exceeds 10s | Test fails with `"Scene population timed out at N bricks"` |
-| FPS below threshold | `p50Fps < 60` | Test fails with `"FPS degradation: p50=${fps} at ${count} bricks (threshold: 60)"` |
-| Memory above threshold | `heapUsedMB >= 200` | Test fails with `"Memory exceeded: ${heap}MB at ${count} bricks (threshold: 200MB)"` |
-| CDP session lost | CDP throws mid-measurement | Retry once; if still failing, mark test as `skip` with warning |
-| Flaky FPS (high variance) | p95 - p50 > 20 FPS | Log warning; do not fail (variance is environment noise) |
-| CI timeout (>15 min) | GitHub Actions job timeout | Job cancelled; artifact upload still runs (`if: always()`) |
+| Concern | Risk | Mitigation |
+|---|---|---|
+| `window.__sceneStore` exposure | Internal state accessible to browser extensions/scripts | Gated on `MODE !== 'production'`; never present in production build |
+| Puppeteer `--no-sandbox` flag | Reduced Chrome sandbox in CI | Acceptable in isolated CI containers; never used in production |
+| CDP access | Full browser control via DevTools Protocol | CDP session is created and destroyed per test; no persistent access |
+| Test data injection | Malformed brick data could crash the store | Test uses only valid, deterministic brick fixtures; no user-controlled input |
+| Serve static files | Built app served on localhost:5173 | Ephemeral CI environment; no external network access |
 
 ---
 
-## 10. Security Considerations
+## 10. Performance Thresholds & Rationale
 
-| Concern | Mitigation |
-|---------|------------|
-| Puppeteer sandbox in CI | Run with `--no-sandbox` flag only in CI (`CI=true` env check); sandbox enabled locally |
-| CDP exposure | CDP session is local to the test process; no network exposure |
-| Artifact data sensitivity | Performance reports contain only FPS/memory numbers — no PII or secrets |
-| Dependency supply chain | Puppeteer pinned to exact version in `package.json`; `npm ci` enforces lockfile |
-| Resource exhaustion | `testTimeout: 120_000` and GitHub Actions `timeout-minutes: 15` prevent runaway tests |
+| Metric | Threshold | Rationale |
+|---|---|---|
+| Frame rate | ≥ 60 FPS | Standard for smooth interactive 3D; below 60 FPS causes perceptible jank |
+| Heap memory | < 200 MB | Comfortable headroom below Chrome's 512 MB default limit; leaves room for app overhead |
+| Stabilization delay | 500 ms | Allows InstancedMesh matrix updates to flush and render loop to reach steady state |
+| Measurement window | 2000 ms | Captures ≥120 frames at 60 FPS for statistically stable average |
+| Max brick count | 500 | PRD requirement; InstancedMesh scales linearly so 500 is the validated ceiling |
 
----
+### 10.1 Scaling Expectation
 
-## 11. Memory & Scaling Analysis
+With `InstancedMesh` (FR-SCENE-002), all 500 bricks of the same type are rendered in a **single draw call**. Expected scaling profile:
 
-### 11.1 Expected Memory Profile
+| Brick Count | Expected FPS | Expected Heap |
+|---|---|---|
+| 100 | ~120 FPS (vsync-limited) | ~50 MB |
+| 250 | ~90 FPS | ~100 MB |
+| 500 | ~60–70 FPS | ~150–180 MB |
 
-| Component | Per-Brick Cost | 500 Bricks Total |
-|-----------|---------------|------------------|
-| `InstancedMesh` matrix buffer | ~64 bytes (4×4 float32) | ~32 KB |
-| Zustand store entry | ~200 bytes | ~100 KB |
-| Three.js geometry (shared) | ~50 KB per brick type | ~250 KB (5 types) |
-| Three.js material (shared) | ~10 KB per material | ~50 KB (5 materials) |
-| **Total estimated** | — | **< 1 MB** (well under 200 MB) |
-
-The 200 MB heap threshold provides a 200× safety margin over the theoretical minimum, accommodating React/R3F framework overhead (~50 MB baseline) and browser internals.
-
-### 11.2 Scaling Linearity Assertion
-
-The test suite logs FPS at each tier. A regression is flagged if:
-```
-(fps_at_500 / fps_at_100) < 0.85
-```
-This catches non-linear degradation even if all tiers individually pass the 60 FPS gate.
+If FPS drops below 60 at 500 bricks, it indicates a regression in the InstancedMesh implementation (FR-SCENE-002) and the build should fail.
 
 ---
 
-## 12. Test Case Mapping
+## 11. Test Case Mapping
 
-| Test Case ID | Description | File | Assertion |
-|-------------|-------------|------|----------|
-| T-PERF-SCALE-001-01 | 100 and 250 brick FPS ≥ 60 | `scalability.test.ts` | `expect(sample.p50Fps).toBeGreaterThanOrEqual(60)` |
-| T-PERF-SCALE-001-02 | 500 brick FPS ≥ 60 + heap < 200 MB | `scalability.test.ts` | `expect(sample.p50Fps).toBeGreaterThanOrEqual(60)` + `expect(memory.heapUsedMB).toBeLessThan(200)` |
+| Test Case ID | Brick Count | FPS Threshold | Heap Threshold | Vitest Test Name |
+|---|---|---|---|---|
+| T-PERF-SCALE-001-01 | 100 | ≥ 60 FPS | < 200 MB | `100 bricks — FPS >= 60 and heap < 200MB` |
+| T-PERF-SCALE-001-01 | 250 | ≥ 60 FPS | < 200 MB | `250 bricks — FPS >= 60 and heap < 200MB` |
+| T-PERF-SCALE-001-02 | 500 | ≥ 60 FPS | < 200 MB | `500 bricks — FPS >= 60 and heap < 200MB` |
 
----
-
-## 13. Implementation Checklist (for Coding Agent)
-
-- [ ] Create `frontend/tests/performance/scalability.test.ts` with three `describe` blocks (100, 250, 500 bricks)
-- [ ] Create `frontend/tests/performance/helpers/brickFactory.ts` with `populateScene` and `clearScene`
-- [ ] Create `frontend/tests/performance/helpers/fpsProbe.ts` with `measureFps` using rAF timestamps
-- [ ] Create `frontend/tests/performance/helpers/memoryProbe.ts` with `measureHeap` using CDP
-- [ ] Create `frontend/tests/performance/fixtures/scalabilityScenes.ts` with pre-computed brick layouts
-- [ ] Create `frontend/vitest.perf.config.ts` with isolated performance project config
-- [ ] Create `.github/workflows/performance.yml` CI workflow
-- [ ] Add `perf-test` target to `Makefile`
-- [ ] Add `puppeteer` to `frontend/package.json` devDependencies
-- [ ] Verify `instancedMeshManager` exposes `addInstance` compatible with test harness
-- [ ] Verify `sceneStore` exposes `clearScene` action (add if missing)
+**Note:** The issue maps 100 and 250 brick tests to T-PERF-SCALE-001-01 and the 500 brick test to T-PERF-SCALE-001-02. The test suite implements all three as parameterized cases.
 
 ---
 
-## 14. Open Questions / Assumptions
+## 12. Acceptance Criteria Mapping
 
-| # | Question / Assumption | Resolution Needed |
-|---|----------------------|------------------|
-| 1 | **Assumption:** `instancedMeshManager.ts` (FR-SCENE-002) is implemented before this NFR is validated. | Confirm FR-SCENE-002 (#7) is merged before running performance tests. |
-| 2 | **Assumption:** `sceneStore` has a `clearScene` action. | Verify in implementation; add if missing. |
-| 3 | **Question:** Should the 60 FPS threshold apply to p50 or p95? | This LLD uses p50 (median) as the primary gate. Human reviewer should confirm. |
-| 4 | **Question:** Is Puppeteer acceptable in CI, or should a lighter headless approach (e.g., `jsdom` + mock rAF) be used? | Puppeteer provides real GPU rendering metrics; jsdom cannot measure real FPS. Recommend Puppeteer. |
-| 5 | **Assumption:** CI runners are `ubuntu-latest` with software rendering (Mesa/SwiftShader). FPS on CI may be lower than on developer machines. | Consider lowering CI threshold to 30 FPS with a separate local threshold of 60 FPS if CI runners cannot sustain 60 FPS in software rendering. |
+| Acceptance Criterion | Test Case | Implementation |
+|---|---|---|
+| 100 bricks → FPS ≥ 60 | T-PERF-SCALE-001-01 | `BrickScenePopulator.populate(page, 100)` + `FPSMeter.measure()` |
+| 250 bricks → FPS ≥ 60 | T-PERF-SCALE-001-01 | `BrickScenePopulator.populate(page, 250)` + `FPSMeter.measure()` |
+| 500 bricks → FPS ≥ 60 | T-PERF-SCALE-001-02 | `BrickScenePopulator.populate(page, 500)` + `FPSMeter.measure()` |
+| CI fails on threshold miss | All | Vitest `expect()` assertions; exit code 1 on failure |
+| Heap < 200 MB at 500 bricks | T-PERF-SCALE-001-02 | `HeapMonitor.measure(cdpSession)` via CDP |
 
 ---
 
-*Generated by Spectra Design Agent — Gate 6a review required before implementation.*
+## 13. Dependencies & Integration Points
+
+### 13.1 Upstream Dependencies
+
+| Dependency | FR-ID | What We Need |
+|---|---|---|
+| InstancedMesh batching | FR-SCENE-002 | Single draw call for same-type bricks; linear memory scaling |
+| sceneStore.addBrick() | FR-SCENE-001 | Programmatic brick placement API |
+| sceneStore.clearScene() | FR-SCENE-001 | Scene reset between test scenarios |
+| Initial load performance | NFR-PERF-001 | App must load within 3s before performance tests begin |
+
+### 13.2 Integration Contracts
+
+- `sceneStore` must be exposed on `window.__sceneStore` in non-production builds
+- `<Canvas>` must have `data-testid="scene-canvas"` for Puppeteer readiness detection
+- The Vite dev server / built app must be accessible at `http://localhost:5173`
+- `InstancedMesh` must handle 500 `setMatrixAt()` calls without throwing
+
+---
+
+## 14. Open Questions
+
+| # | Question | Impact | Owner |
+|---|---|---|---|
+| 1 | Should SwiftShader (software rendering) be used as CI fallback if GPU is unavailable? | FPS results may differ from hardware GPU; threshold may need adjustment | Tech Lead |
+| 2 | Should the 60 FPS threshold apply to SwiftShader or only hardware GPU? | If SwiftShader is used, a lower threshold (e.g., 30 FPS) may be appropriate | Tech Lead |
+| 3 | Should mixed brick types (1x1, 2x4, etc.) be tested, or only a single type? | Mixed types require multiple InstancedMesh instances; may affect FPS | Tech Lead |
+| 4 | Should the heap threshold be per-brick-count or only at 500 bricks? | Tighter thresholds at 100/250 would catch memory leaks earlier | Tech Lead |
+| 5 | Is `serve` the right static server, or should `vite preview` be used? | `vite preview` is more representative of production; `serve` is simpler | Tech Lead |
+
+---
+
+## 15. Implementation Checklist
+
+### Test Infrastructure
+- [ ] Add `puppeteer`, `serve`, `wait-on` to `frontend/package.json` devDependencies
+- [ ] Create `frontend/vitest.performance.config.ts`
+- [ ] Create `frontend/tests/performance/` directory structure
+- [ ] Create `frontend/tests/performance/helpers/ScalabilityThresholds.ts`
+- [ ] Create `frontend/tests/performance/helpers/BrickScenePopulator.ts`
+- [ ] Create `frontend/tests/performance/helpers/FPSMeter.ts`
+- [ ] Create `frontend/tests/performance/helpers/HeapMonitor.ts`
+- [ ] Create `frontend/tests/performance/scalability.test.ts`
+
+### App Integration
+- [ ] Expose `window.__sceneStore` in `frontend/src/main.tsx` (non-production only)
+- [ ] Add `data-testid="scene-canvas"` to `<Canvas>` in `SceneCanvas.tsx`
+
+### CI Integration
+- [ ] Add `scalability-test` job to `.github/workflows/ci.yml`
+- [ ] Add `scalability-test` to required status checks on `main` branch
+- [ ] Verify Puppeteer Chrome installation in CI environment
+
+### Validation
+- [ ] Run test suite locally with 100/250/500 bricks
+- [ ] Confirm FPS ≥ 60 at all brick counts
+- [ ] Confirm heap < 200 MB at 500 bricks
+- [ ] Confirm CI job fails when threshold is artificially lowered
+- [ ] Confirm CI job passes on green build
