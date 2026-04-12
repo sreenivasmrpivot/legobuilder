@@ -1,0 +1,90 @@
+{
+  "handoff_id": "027_design_fr_ui_003_complete",
+  "from_agent": "design-agent",
+  "to_agent": "frontend-test",
+  "timestamp": "2026-04-12T16:06:09Z",
+  "status": "complete",
+  "app_id": "app-legobuilder-20260410",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "event": {
+    "event_id": "evt-027-design-fr-ui-003",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "wf-app-legobuilder-20260410",
+    "causation_id": "retrigger4codingissue25_frontend_review_complete"
+  },
+  "state_ref": {
+    "request_id": "bcc0b22a-bcc1-423e-9c7c-4c78c89e4236",
+    "workflow_state_uri": "docs/handoffs/027_design_fr_ui_003_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "path": "/"
+  },
+  "issue_number": 25,
+  "fr_id": "FR-UI-003",
+  "area": "frontend",
+  "branch": "feature/25-fr-ui-003-design-retrigger",
+  "artifacts": [
+    {
+      "name": "low-level-design",
+      "path": "docs/features/FR-UI-003/LOW_LEVEL_DESIGN.md",
+      "type": "design",
+      "description": "Full LLD for FR-UI-003: Ghost Brick Placement Preview — API contracts, data models, component architecture, sequence diagrams, error handling, security considerations. Already merged on main via PR #53."
+    },
+    {
+      "name": "handoff-json",
+      "path": "docs/handoffs/027_design_fr_ui_003_complete.json",
+      "type": "handoff",
+      "description": "Machine-readable handoff artifact for frontend-test agent"
+    },
+    {
+      "name": "handoff-markdown",
+      "path": "docs/handoffs/027_design_fr_ui_003_HANDOFF.md",
+      "type": "handoff",
+      "description": "Human-readable handoff summary for Gate 6a routing"
+    }
+  ],
+  "summary": {
+    "work_completed": "LLD for FR-UI-003 (Ghost Brick Placement Preview) was authored and merged to main via PR #53. This retrigger creates fresh handoff artifacts (027) to unblock the stalled pipeline. The frontend-test and frontend-coding agents have not yet run for this feature.",
+    "key_findings": [
+      "LLD at docs/features/FR-UI-003/LOW_LEVEL_DESIGN.md is complete and approved (merged via PR #53)",
+      "Ghost brick uses Three.js mesh with opacity:0.5, transparent:true material",
+      "Position updated on every onPointerMove event via PointerEventCapture component",
+      "ghostBrickStore (Zustand) holds position, isValid, brickTypeId state",
+      "useGhostBrick hook wires pointer events to store; GhostBrick component renders the preview mesh"
+    ],
+    "metrics": {
+      "lld_sections": 12,
+      "components_designed": 4,
+      "test_cases_mapped": 2
+    }
+  },
+  "human_review_required": [],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read docs/features/FR-UI-003/LOW_LEVEL_DESIGN.md from main branch",
+      "Write TDD test suite for T-FE-UI-003-01 (ghost brick appears at valid position — green, semi-transparent) on branch feature/25-fr-ui-003-frontend-tests",
+      "Write TDD test suite for T-FE-UI-003-02 (ghost brick turns red on invalid/occupied position) on branch feature/25-fr-ui-003-frontend-tests",
+      "Test files: ghostBrickStore.test.ts, useGhostBrick.test.ts, GhostBrick.test.tsx, PointerEventCapture.test.tsx",
+      "After tests: frontend-coding agent implements GhostBrick, PointerEventCapture, ghostBrickStore, useGhostBrick per LLD"
+    ],
+    "files_to_read": [
+      "docs/features/FR-UI-003/LOW_LEVEL_DESIGN.md"
+    ],
+    "summary": "Design for FR-UI-003 is complete and approved. Frontend-test agent must write TDD test suite covering T-FE-UI-003-01 and T-FE-UI-003-02 before frontend-coding agent implements the ghost brick feature."
+  },
+  "workflow_state": {
+    "workflow_type": "pure_greenfield",
+    "current_phase": "design",
+    "completed_phases": ["research", "pm", "architecture", "design"],
+    "remaining_phases": ["frontend-test", "frontend-coding", "frontend-review", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-025-fr-ui-003"],
+    "forward_pass_score": 0.95,
+    "backward_pass_score": 0.93,
+    "human_score": null,
+    "convergence_score": 0.94
+  }
+}
