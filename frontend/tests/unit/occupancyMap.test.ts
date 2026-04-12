@@ -1,64 +1,41 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { OccupancyMap } from '../../src/engine/occupancyMap';
-import type { Brick } from '../../src/types/brick';
 
 describe('OccupancyMap', () => {
   let map: OccupancyMap;
+  beforeEach(() => { map = new OccupancyMap(); });
 
-  beforeEach(() => {
-    map = new OccupancyMap();
+  it('should report unoccupied cells as available', () => {
+    expect(map.isOccupied(0, 0, 0)).toBe(false);
+    expect(map.canPlace([[0, 0, 0], [1, 0, 0]])).toBe(true);
   });
 
-  it('allows placement on empty grid', () => {
-    expect(map.canPlace('brick-2x4', [0, 0, 0])).toBe(true);
+  it('should detect collisions after occupation', () => {
+    map.occupy('brick-1', [[0, 0, 0], [1, 0, 0]]);
+    expect(map.isOccupied(0, 0, 0)).toBe(true);
+    expect(map.canPlace([[0, 0, 0]])).toBe(false);
   });
 
-  it('rejects placement on occupied cells', () => {
-    const brick: Brick = {
-      id: '1',
-      type: 'brick-2x4',
-      position: [0, 0, 0],
-      rotation: 0,
-      color: '#D01012',
-    };
-    map.occupy(brick);
-    expect(map.canPlace('brick-1x1', [0, 0, 0])).toBe(false);
+  it('should release cells on brick removal', () => {
+    map.occupy('brick-1', [[0, 0, 0]]);
+    map.release([[0, 0, 0]]);
+    expect(map.isOccupied(0, 0, 0)).toBe(false);
   });
 
-  it('allows placement on adjacent cells', () => {
-    const brick: Brick = {
-      id: '1',
-      type: 'brick-1x1',
-      position: [0, 0, 0],
-      rotation: 0,
-      color: '#D01012',
-    };
-    map.occupy(brick);
-    expect(map.canPlace('brick-1x1', [1, 0, 0])).toBe(true);
+  it('should return brick ID at occupied position', () => {
+    map.occupy('brick-42', [[5, 0, 3]]);
+    expect(map.getBrickAt(5, 0, 3)).toBe('brick-42');
+    expect(map.getBrickAt(0, 0, 0)).toBeUndefined();
   });
 
-  it('frees cells on release', () => {
-    const brick: Brick = {
-      id: '1',
-      type: 'brick-2x4',
-      position: [0, 0, 0],
-      rotation: 0,
-      color: '#D01012',
-    };
-    map.occupy(brick);
-    map.release(brick);
-    expect(map.canPlace('brick-2x4', [0, 0, 0])).toBe(true);
+  it('should track size correctly', () => {
+    expect(map.size).toBe(0);
+    map.occupy('b1', [[0, 0, 0], [1, 0, 0]]);
+    expect(map.size).toBe(2);
   });
 
-  it('clears all cells', () => {
-    const brick: Brick = {
-      id: '1',
-      type: 'brick-2x4',
-      position: [0, 0, 0],
-      rotation: 0,
-      color: '#D01012',
-    };
-    map.occupy(brick);
+  it('should clear all cells', () => {
+    map.occupy('b1', [[0, 0, 0], [1, 0, 0], [2, 0, 0]]);
     map.clear();
     expect(map.size).toBe(0);
   });
