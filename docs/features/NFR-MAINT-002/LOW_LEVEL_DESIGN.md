@@ -1,747 +1,558 @@
-# Low-Level Design: NFR-MAINT-002 — TypeScript Strict Mode Enforcement
+# Low-Level Design: NFR-MAINT-002
+## Enforce 100% TypeScript Strict Mode with Zero `any` Types in Production Code
 
 **FR-ID:** NFR-MAINT-002
 **Issue:** #38
-**Title:** Enforce 100% TypeScript strict mode with zero `any` types in production code
-**Author:** Design Agent (Spectra Framework)
-**Status:** Draft — Awaiting Gate 6a Design Review
+**Status:** Draft — Pending Design Review (Gate 6a)
+**Author:** Spectra Design Agent
 **Date:** 2026-04-11
 
 ---
 
 ## 1. Overview
 
-This document defines the low-level design for enforcing 100% TypeScript strict mode across the LegoBuilder frontend codebase. This is a non-functional requirement (NFR) focused on maintainability and type safety. The enforcement is achieved through a combination of TypeScript compiler configuration, ESLint rules, and CI pipeline gates — not through runtime code changes.
+This document defines the low-level design for enforcing 100% TypeScript strict mode with zero `any` types across the LegoBuilder frontend codebase. The enforcement is achieved through a combination of compiler configuration, ESLint rules, and CI pipeline gates that prevent any regression from being merged.
 
-### 1.1 Scope
-
-| In Scope | Out of Scope |
-|---|---|
-| `tsconfig.json` strict mode flags | Runtime type guards (covered by individual FRs) |
-| ESLint `no-explicit-any` rule configuration | Third-party library type definitions |
-| CI pipeline type-check and lint steps | Test files (may use `any` with justification) |
-| Shared type definitions in `frontend/src/types/` | Node.js / build tooling scripts |
-| Developer workflow (pre-commit hooks) | Backend code (no backend in this SPA) |
-
-### 1.2 Goals
-
-- Zero TypeScript errors when `tsc --strict --noEmit` runs in CI.
-- Zero ESLint `no-explicit-any` violations in `src/` production code.
-- Any PR introducing an `any` type causes CI to fail automatically.
-- All shared types are centralized in `frontend/src/types/` for discoverability.
+This is a **non-functional requirement** (maintainability / type safety). It does not introduce new user-visible features but establishes a quality gate that all future code must pass.
 
 ---
 
-## 2. TypeScript Configuration Design
+## 2. Scope
 
-### 2.1 `tsconfig.json` — Strict Mode Flags
+| In Scope | Out of Scope |
+|---|---|
+| `frontend/src/**/*.ts` and `frontend/src/**/*.tsx` | Third-party `node_modules` |
+| `frontend/tsconfig.json` strict flags | Test files (`*.test.ts`, `*.spec.ts`) — covered by separate tsconfig |
+| `frontend/eslint.config.js` `no-explicit-any` rule | Backend code (no backend in this repo) |
+| GitHub Actions CI workflow step | Auto-fixing existing violations (manual remediation) |
+| `frontend/src/types/` shared type definitions | `*.js` / `*.cjs` config files |
 
-The root `tsconfig.json` (at `frontend/tsconfig.json`) SHALL include the following compiler options:
+---
 
-```json
+## 3. TypeScript Configuration Design
+
+### 3.1 `tsconfig.json` — Strict Flags
+
+The existing `frontend/tsconfig.json` must have the following compiler options enabled. All flags below are implied by `"strict": true` but are listed explicitly for auditability:
+
+```jsonc
+// frontend/tsconfig.json
 {
   "compilerOptions": {
+    // --- Strict mode umbrella (enables all flags below) ---
     "strict": true,
-    "noImplicitAny": true,
-    "strictNullChecks": true,
-    "strictFunctionTypes": true,
-    "strictBindCallApply": true,
-    "strictPropertyInitialization": true,
-    "noImplicitThis": true,
-    "alwaysStrict": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "exactOptionalPropertyTypes": false,
-    "useUnknownInCatchVariables": true,
+
+    // --- Individual strict flags (explicit for auditability) ---
+    "strictNullChecks": true,          // null/undefined are not assignable to other types
+    "strictFunctionTypes": true,       // Contravariant function parameter checking
+    "strictBindCallApply": true,       // Strict bind/call/apply type checking
+    "strictPropertyInitialization": true, // Class properties must be initialized
+    "noImplicitAny": true,             // Error on implicit any inference
+    "noImplicitThis": true,            // Error on implicit this type
+    "alwaysStrict": true,              // Emit 'use strict' in all files
+
+    // --- Additional safety flags (beyond strict umbrella) ---
+    "noUncheckedIndexedAccess": true,  // Array/index access returns T | undefined
+    "noImplicitReturns": true,         // All code paths must return a value
+    "noFallthroughCasesInSwitch": true, // No fallthrough in switch statements
+    "exactOptionalPropertyTypes": true, // Optional props cannot be set to undefined explicitly
+    "useUnknownInCatchVariables": true, // catch(e) binds e as unknown, not any
+
+    // --- Existing project settings (preserved) ---
     "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
-    },
-    "skipLibCheck": true,
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true
   },
   "include": ["src"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"]
+  "exclude": ["node_modules", "dist"]
 }
 ```
 
-**Key decisions:**
+### 3.2 `tsconfig.test.json` — Test Relaxation
 
-| Flag | Value | Rationale |
-|---|---|---|
-| `strict` | `true` | Enables all strict sub-flags as a group |
-| `noUncheckedIndexedAccess` | `true` | Array/object index access returns `T \| undefined`, preventing silent runtime errors |
-| `useUnknownInCatchVariables` | `true` | Catch clause variables typed as `unknown` instead of `any` |
-| `noImplicitReturns` | `true` | All code paths in functions must return a value |
-| `exactOptionalPropertyTypes` | `false` | Deferred — too strict for initial adoption; can be enabled incrementally |
-| `skipLibCheck` | `true` | Avoids failures from third-party `.d.ts` files with loose types |
-| `noEmit` | `true` | Type-check only; Vite handles transpilation |
+Test files (Vitest unit tests, Playwright e2e) may use `any` for mocking purposes. A separate tsconfig for tests relaxes only the `no-explicit-any` ESLint rule (not the compiler flags):
 
-### 2.2 `tsconfig.test.json` — Test Relaxation
-
-Test files may use `any` in limited, justified cases (e.g., mocking). A separate test config extends the base:
-
-```json
+```jsonc
+// frontend/tsconfig.test.json
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "noUncheckedIndexedAccess": false
+    // Tests still compile under strict mode.
+    // ESLint no-explicit-any is overridden per-file via eslint-disable comments
+    // or via the eslint.config.js overrides section (see Section 4.2).
   },
-  "include": ["src", "**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"]
+  "include": ["src", "tests"]
 }
 ```
 
-ESLint will still enforce `no-explicit-any` in test files but with a `warn` severity (not `error`) to allow controlled test mocking patterns.
-
 ---
 
-## 3. ESLint Configuration Design
+## 4. ESLint Configuration Design
 
-### 3.1 Rule Configuration
+### 4.1 Rule: `@typescript-eslint/no-explicit-any`
 
-The `.eslintrc.cjs` (or `eslint.config.js` for flat config) SHALL include:
+The ESLint rule `@typescript-eslint/no-explicit-any` must be set to `"error"` in the production source scope. This prevents any `any` type annotation from being introduced, even when the TypeScript compiler would accept it (e.g., explicit `as any` casts).
 
 ```js
-// .eslintrc.cjs
-module.exports = {
-  root: true,
-  parser: '@typescript-eslint/parser',
-  parserOptions: {
-    project: './tsconfig.json',
-    tsconfigRootDir: __dirname,
-    ecmaVersion: 'latest',
-    sourceType: 'module',
-  },
-  plugins: ['@typescript-eslint'],
-  extends: [
-    'eslint:recommended',
-    'plugin:@typescript-eslint/recommended-type-checked',
-    'plugin:@typescript-eslint/stylistic-type-checked',
-    'plugin:react-hooks/recommended',
-    'plugin:react/recommended',
-    'plugin:react/jsx-runtime',
-  ],
-  rules: {
-    // Core type-safety rules
-    '@typescript-eslint/no-explicit-any': 'error',
-    '@typescript-eslint/no-unsafe-assignment': 'error',
-    '@typescript-eslint/no-unsafe-call': 'error',
-    '@typescript-eslint/no-unsafe-member-access': 'error',
-    '@typescript-eslint/no-unsafe-return': 'error',
-    '@typescript-eslint/no-unsafe-argument': 'error',
+// frontend/eslint.config.js — relevant section
+import tseslint from 'typescript-eslint';
 
-    // Prefer type-safe alternatives
-    '@typescript-eslint/prefer-as-const': 'error',
-    '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
-    '@typescript-eslint/consistent-type-definitions': ['error', 'interface'],
-    '@typescript-eslint/no-non-null-assertion': 'warn',
-
-    // Catch clause
-    '@typescript-eslint/use-unknown-in-catch-variables': 'error',
-
-    // Generics over any
-    '@typescript-eslint/no-unnecessary-type-assertion': 'error',
-    '@typescript-eslint/no-redundant-type-constituents': 'error',
-  },
-  overrides: [
-    {
-      // Relax rules for test files
-      files: ['**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts', '**/*.spec.tsx'],
-      rules: {
-        '@typescript-eslint/no-explicit-any': 'warn',
-        '@typescript-eslint/no-unsafe-assignment': 'off',
-        '@typescript-eslint/no-unsafe-call': 'off',
-        '@typescript-eslint/no-unsafe-member-access': 'off',
-      },
+export default tseslint.config(
+  // ... existing config ...
+  {
+    // Production source files only
+    files: ['src/**/*.ts', 'src/**/*.tsx'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-unsafe-assignment': 'error',
+      '@typescript-eslint/no-unsafe-call': 'error',
+      '@typescript-eslint/no-unsafe-member-access': 'error',
+      '@typescript-eslint/no-unsafe-return': 'error',
+      '@typescript-eslint/no-unsafe-argument': 'error',
     },
-  ],
-  settings: {
-    react: { version: 'detect' },
   },
-};
+  {
+    // Test files — relax no-explicit-any for mocking
+    files: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'tests/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'warn',  // warn, not error
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+    },
+  }
+);
 ```
 
-### 3.2 Rule Rationale
+### 4.2 Companion Rules
+
+The following companion rules are enabled alongside `no-explicit-any` to close common escape hatches:
 
 | Rule | Severity | Rationale |
 |---|---|---|
-| `no-explicit-any` | `error` | Primary enforcement — zero `any` in production |
-| `no-unsafe-assignment` | `error` | Prevents `any` from propagating through assignments |
-| `no-unsafe-call` | `error` | Prevents calling `any`-typed values as functions |
-| `no-unsafe-member-access` | `error` | Prevents property access on `any`-typed values |
-| `no-unsafe-return` | `error` | Prevents returning `any` from typed functions |
-| `no-unsafe-argument` | `error` | Prevents passing `any` to typed function parameters |
-| `consistent-type-imports` | `error` | Enforces `import type` for type-only imports (tree-shaking) |
-| `no-non-null-assertion` | `warn` | Discourages `!` operator; prefer explicit null checks |
+| `@typescript-eslint/no-explicit-any` | `error` | Primary enforcement |
+| `@typescript-eslint/no-unsafe-assignment` | `error` | Prevents `any` spreading via assignment |
+| `@typescript-eslint/no-unsafe-call` | `error` | Prevents calling `any`-typed values |
+| `@typescript-eslint/no-unsafe-member-access` | `error` | Prevents property access on `any` |
+| `@typescript-eslint/no-unsafe-return` | `error` | Prevents returning `any` from typed functions |
+| `@typescript-eslint/no-unsafe-argument` | `error` | Prevents passing `any` to typed parameters |
+| `@typescript-eslint/consistent-type-imports` | `error` | Enforces `import type` for type-only imports |
+| `@typescript-eslint/prefer-as-const` | `error` | Prefers `as const` over literal type assertions |
 
 ---
 
-## 4. Shared Type Definitions
+## 5. Type System Architecture
 
-### 4.1 Directory Structure
+### 5.1 Shared Type Definitions (`frontend/src/types/`)
+
+All shared domain types live in `frontend/src/types/`. These files are the single source of truth for the type system. No `any` is permitted in these files.
 
 ```
 frontend/src/types/
-├── brick.ts          # BrickId, BrickColor, BrickDimensions, PlacedBrick
-├── scene.ts          # SceneState, CameraState, GridConfig
-├── commands.ts       # Command, CommandType, UndoableCommand
-├── project.ts        # LegoProject, ProjectMetadata, SaveState
-└── index.ts          # Re-exports all types for clean imports
+├── brick.ts       — BrickId, BrickColor, BrickSize, PlacedBrick, BrickTemplate
+├── scene.ts       — SceneState, GridPosition, Viewport, RenderLayer
+├── commands.ts    — Command<T>, CommandResult, UndoStack
+└── project.ts     — Project, ProjectMetadata, SaveState
 ```
 
-### 4.2 Type Module Contracts
+### 5.2 Generic Patterns (Preferred over `any`)
 
-#### `brick.ts`
-
-```typescript
-// frontend/src/types/brick.ts
-
-export type BrickId = string & { readonly __brand: 'BrickId' };
-
-export interface BrickColor {
-  readonly hex: string;       // e.g. '#FF0000'
-  readonly name: string;      // e.g. 'Red'
-  readonly legoId: number;    // Official LEGO color ID
-}
-
-export interface BrickDimensions {
-  readonly width: number;     // studs (X axis)
-  readonly depth: number;     // studs (Z axis)
-  readonly height: number;    // plates (Y axis)
-}
-
-export interface BrickPosition {
-  readonly x: number;         // stud units
-  readonly y: number;         // plate units
-  readonly z: number;         // stud units
-}
-
-export type BrickRotation = 0 | 90 | 180 | 270;  // degrees around Y axis
-
-export interface PlacedBrick {
-  readonly id: BrickId;
-  readonly partId: string;    // LEGO part number
-  readonly color: BrickColor;
-  readonly position: BrickPosition;
-  readonly rotation: BrickRotation;
-  readonly dimensions: BrickDimensions;
-}
-```
-
-#### `scene.ts`
-
-```typescript
-// frontend/src/types/scene.ts
-
-export interface CameraState {
-  readonly azimuth: number;   // degrees
-  readonly elevation: number; // degrees
-  readonly distance: number;  // stud units
-  readonly target: Readonly<{ x: number; y: number; z: number }>;
-}
-
-export interface GridConfig {
-  readonly size: number;      // studs per side
-  readonly visible: boolean;
-  readonly color: string;     // hex
-}
-
-export interface SceneState {
-  readonly bricks: ReadonlyMap<string, import('./brick').PlacedBrick>;
-  readonly selectedBrickId: string | null;
-  readonly camera: CameraState;
-  readonly grid: GridConfig;
-  readonly isLoading: boolean;
-  readonly error: string | null;
-}
-```
-
-#### `commands.ts`
-
-```typescript
-// frontend/src/types/commands.ts
-import type { PlacedBrick, BrickId } from './brick';
-
-export type CommandType =
-  | 'PLACE_BRICK'
-  | 'REMOVE_BRICK'
-  | 'MOVE_BRICK'
-  | 'ROTATE_BRICK'
-  | 'CHANGE_COLOR';
-
-export interface UndoableCommand {
-  readonly type: CommandType;
-  readonly timestamp: number;
-  execute(): void;
-  undo(): void;
-}
-
-export interface PlaceBrickCommand extends UndoableCommand {
-  readonly type: 'PLACE_BRICK';
-  readonly brick: PlacedBrick;
-}
-
-export interface RemoveBrickCommand extends UndoableCommand {
-  readonly type: 'REMOVE_BRICK';
-  readonly brickId: BrickId;
-  readonly removedBrick: PlacedBrick; // stored for undo
-}
-
-export type Command = PlaceBrickCommand | RemoveBrickCommand;
-```
-
-#### `project.ts`
-
-```typescript
-// frontend/src/types/project.ts
-import type { PlacedBrick } from './brick';
-
-export interface ProjectMetadata {
-  readonly id: string;
-  readonly name: string;
-  readonly createdAt: string;   // ISO 8601
-  readonly updatedAt: string;   // ISO 8601
-  readonly version: number;
-}
-
-export interface LegoProject {
-  readonly metadata: ProjectMetadata;
-  readonly bricks: readonly PlacedBrick[];
-  readonly thumbnail?: string;  // base64 data URL
-}
-
-export type SaveState = 'unsaved' | 'saving' | 'saved' | 'error';
-```
-
-#### `index.ts` — Barrel Export
-
-```typescript
-// frontend/src/types/index.ts
-export type { BrickId, BrickColor, BrickDimensions, BrickPosition, BrickRotation, PlacedBrick } from './brick';
-export type { CameraState, GridConfig, SceneState } from './scene';
-export type { CommandType, UndoableCommand, PlaceBrickCommand, RemoveBrickCommand, Command } from './commands';
-export type { ProjectMetadata, LegoProject, SaveState } from './project';
-```
-
-### 4.3 Branded Types Pattern
-
-To prevent accidental mixing of primitive types (e.g., passing a raw `string` where a `BrickId` is expected), branded types are used:
-
-```typescript
-// Pattern: Opaque/branded type
-type BrickId = string & { readonly __brand: 'BrickId' };
-
-// Factory function (type-safe constructor)
-function createBrickId(raw: string): BrickId {
-  return raw as BrickId; // Only place where cast is allowed
-}
-```
-
-This pattern is the **only** approved use of type assertions (`as`) in production code.
-
-### 4.4 Generics Over `any`
-
-Where flexible typing is needed, generics SHALL be used instead of `any`:
+When flexible typing is needed, generics are the approved pattern:
 
 ```typescript
 // ❌ Forbidden
-function getValue(obj: any, key: string): any {
-  return obj[key];
+function processEvent(event: any): void { ... }
+
+// ✅ Approved — generic with constraint
+function processEvent<T extends Event>(event: T): void { ... }
+
+// ❌ Forbidden
+const cache: Record<string, any> = {};
+
+// ✅ Approved — generic cache
+const cache = new Map<string, BrickTemplate>();
+
+// ❌ Forbidden
+function parseJSON(raw: string): any { ... }
+
+// ✅ Approved — unknown + type guard
+function parseJSON(raw: string): unknown { ... }
+function isBrick(value: unknown): value is PlacedBrick { ... }
+```
+
+### 5.3 `unknown` as the Safe Alternative
+
+For values whose type cannot be statically known (e.g., JSON parsing, external events, error objects), `unknown` is the approved alternative to `any`:
+
+| Scenario | Forbidden | Approved |
+|---|---|---|
+| JSON.parse result | `any` | `unknown` + type guard |
+| catch clause variable | `any` (pre-TS 4.4) | `unknown` (useUnknownInCatchVariables: true) |
+| Dynamic import result | `any` | typed import or `unknown` |
+| Event handler payload | `any` | `Event` subtype or generic `<T extends Event>` |
+| Third-party callback | `any` | `Parameters<typeof callback>` |
+
+### 5.4 Type Guard Pattern
+
+```typescript
+// Standard type guard pattern for unknown values
+function isPlacedBrick(value: unknown): value is PlacedBrick {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'id' in value &&
+    'position' in value &&
+    'color' in value
+  );
 }
 
-// ✅ Required
-function getValue<T, K extends keyof T>(obj: T, key: K): T[K] {
-  return obj[key];
+// Usage
+const parsed: unknown = JSON.parse(raw);
+if (isPlacedBrick(parsed)) {
+  // parsed is now PlacedBrick — fully typed
+  scene.addBrick(parsed);
 }
-
-// ❌ Forbidden — event handler
-const handleEvent = (e: any) => { ... };
-
-// ✅ Required — event handler
-const handleEvent = (e: React.MouseEvent<HTMLButtonElement>) => { ... };
 ```
 
 ---
 
-## 5. CI Pipeline Design
+## 6. CI Pipeline Design
 
-### 5.1 CI Steps (GitHub Actions)
+### 6.1 GitHub Actions Workflow Step
 
-The CI workflow SHALL include the following steps in order:
+A dedicated `type-check` job is added to the CI workflow (`.github/workflows/ci.yml`). It runs on every PR and push to `main`:
 
 ```yaml
-# .github/workflows/ci.yml (relevant steps)
+# .github/workflows/ci.yml — type-check job
 jobs:
-  type-check-and-lint:
-    name: Type Check & Lint
+  type-check:
+    name: TypeScript Strict Check
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
-        working-directory: frontend
 
-      - name: TypeScript strict type check
+      - name: TypeScript strict check
         run: npx tsc --strict --noEmit
-        working-directory: frontend
-        # Fails if ANY TypeScript error exists
+        # Fails the job if any TypeScript error is found.
+        # Exit code 1 = errors present; exit code 0 = clean.
 
-      - name: ESLint — zero warnings
-        run: npx eslint src/ --max-warnings 0 --ext .ts,.tsx
-        working-directory: frontend
-        # Fails if ANY lint warning or error exists
-
-      - name: Check for any types (belt-and-suspenders)
-        run: |
-          if grep -rn ': any' src/ --include='*.ts' --include='*.tsx' | grep -v '.test.' | grep -v '.spec.'; then
-            echo "ERROR: Explicit 'any' type found in production code"
-            exit 1
-          fi
-        working-directory: frontend
-        # Belt-and-suspenders grep check as a final safety net
+      - name: ESLint no-explicit-any check
+        run: npx eslint src/ --max-warnings 0
+        # --max-warnings 0 means any warning or error fails the job.
+        # no-explicit-any is set to 'error' so any any type fails here.
 ```
 
-### 5.2 Step Ordering Rationale
-
-```mermaid
-flowchart LR
-    A[Install deps] --> B[tsc --strict --noEmit]
-    B --> C[eslint --max-warnings 0]
-    C --> D[grep any check]
-    D --> E{All pass?}
-    E -->|Yes| F[Proceed to build]
-    E -->|No| G[CI fails — PR blocked]
-```
-
-**Rationale for ordering:**
-1. `tsc` runs first — catches structural type errors before linting.
-2. `eslint` runs second — catches `any` usage and style violations.
-3. `grep` runs last — belt-and-suspenders check for any edge cases ESLint misses.
-
-### 5.3 PR Gate Behavior
-
-| Scenario | CI Result | PR Status |
-|---|---|---|
-| Zero TypeScript errors, zero ESLint violations | ✅ Pass | Mergeable |
-| TypeScript error introduced | ❌ Fail | Blocked |
-| `any` type introduced in `src/` | ❌ Fail | Blocked |
-| `any` in test file only | ⚠️ Warn | Mergeable (warn only) |
-| Third-party `.d.ts` type error | ✅ Pass | `skipLibCheck: true` bypasses |
-
----
-
-## 6. Pre-commit Hook Design (Developer Workflow)
-
-To catch violations before CI, a pre-commit hook via `husky` + `lint-staged` SHALL be configured:
-
-```json
-// package.json (relevant sections)
-{
-  "scripts": {
-    "type-check": "tsc --strict --noEmit",
-    "lint": "eslint src/ --max-warnings 0 --ext .ts,.tsx",
-    "lint:fix": "eslint src/ --fix --ext .ts,.tsx",
-    "prepare": "husky install"
-  },
-  "lint-staged": {
-    "src/**/*.{ts,tsx}": [
-      "eslint --max-warnings 0",
-      "tsc --strict --noEmit --skipLibCheck"
-    ]
-  }
-}
-```
-
-```bash
-# .husky/pre-commit
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-npx lint-staged
-```
-
-**Developer feedback loop:**
+### 6.2 CI Gate Sequence
 
 ```mermaid
 sequenceDiagram
     participant Dev as Developer
-    participant Hook as pre-commit hook
-    participant ESLint as ESLint
-    participant TSC as tsc
-    participant CI as GitHub Actions CI
+    participant GH as GitHub
+    participant CI as GitHub Actions
+    participant TSC as tsc --strict
+    participant ESL as eslint src/
 
-    Dev->>Hook: git commit
-    Hook->>ESLint: lint-staged: eslint staged files
-    ESLint-->>Hook: violations? (error/warn)
-    Hook->>TSC: tsc --strict --noEmit
-    TSC-->>Hook: type errors?
-    alt All clean
-        Hook-->>Dev: Commit accepted
-        Dev->>CI: git push → PR
-        CI->>CI: Full tsc + eslint on all src/
-        CI-->>Dev: PR check passes
-    else Violations found
-        Hook-->>Dev: Commit rejected with error details
-        Dev->>Dev: Fix violations
-        Dev->>Hook: git commit (retry)
-    end
-```
-
----
-
-## 7. Error Handling Strategy
-
-### 7.1 TypeScript Error Categories
-
-| Error Category | Example | Resolution Pattern |
-|---|---|---|
-| Implicit `any` from untyped import | `import data from './data.json'` | Add `resolveJsonModule: true` + explicit type |
-| `any` from third-party API | `window.someLib.method()` | Create typed wrapper or `declare module` |
-| Catch clause `any` | `catch (e) { e.message }` | Use `useUnknownInCatchVariables` + type guard |
-| Index signature `any` | `obj[dynamicKey]` | Use `Record<string, T>` or `Map<string, T>` |
-| Generic constraint missing | `function fn(x)` | Add explicit generic `<T>(x: T)` |
-
-### 7.2 Catch Clause Pattern
-
-```typescript
-// ❌ Forbidden (implicit any in catch)
-try {
-  await loadScene();
-} catch (e) {
-  console.error(e.message); // e is any — TypeScript error
-}
-
-// ✅ Required (unknown + type guard)
-try {
-  await loadScene();
-} catch (e: unknown) {
-  if (e instanceof Error) {
-    console.error(e.message);
-  } else {
-    console.error('Unknown error', String(e));
-  }
-}
-```
-
-### 7.3 Third-Party Library Typing
-
-When a third-party library lacks type definitions:
-
-1. **Check `@types/` registry first** — `npm install -D @types/<package>`
-2. **Use `declare module`** if no `@types/` package exists:
-   ```typescript
-   // frontend/src/types/declarations.d.ts
-   declare module 'untyped-library' {
-     export function doThing(input: string): number;
-   }
-   ```
-3. **Never use `// @ts-ignore`** — use `// @ts-expect-error` with a comment explaining why.
-
----
-
-## 8. Security Considerations
-
-| Consideration | Design Decision |
-|---|---|
-| Type assertion abuse | Only branded type factories may use `as` casts; enforced by code review |
-| `@ts-ignore` suppression | Forbidden in production code; `@ts-expect-error` allowed with mandatory comment |
-| `any` in API response parsing | All API responses (localStorage, fetch) must be parsed through Zod or explicit type guards |
-| Prototype pollution via index access | `noUncheckedIndexedAccess: true` forces `undefined` checks on all index access |
-| Type-unsafe JSON parsing | `JSON.parse()` returns `unknown` (with `useUnknownInCatchVariables`); must be validated before use |
-
-### 8.1 Safe JSON Parsing Pattern
-
-```typescript
-// ❌ Forbidden
-const data = JSON.parse(raw) as LegoProject; // unsafe cast
-
-// ✅ Required — validate before use
-import { legoProjectSchema } from '@/schemas/project';
-
-function parseProject(raw: string): LegoProject | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    const result = legoProjectSchema.safeParse(parsed);
-    return result.success ? result.data : null;
-  } catch {
-    return null;
-  }
-}
-```
-
----
-
-## 9. Sequence Diagrams
-
-### 9.1 CI Type-Check Flow
-
-```mermaid
-sequenceDiagram
-    participant PR as Pull Request
-    participant GH as GitHub Actions
-    participant TSC as TypeScript Compiler
-    participant ESL as ESLint
-    participant GRP as grep check
-    participant MRG as Merge Gate
-
-    PR->>GH: Push to feature branch
-    GH->>GH: npm ci (install deps)
-    GH->>TSC: tsc --strict --noEmit
-    alt TypeScript errors
-        TSC-->>GH: Exit code 1
-        GH-->>PR: ❌ Check failed: TypeScript errors
-        GH-->>MRG: Block merge
+    Dev->>GH: Open Pull Request
+    GH->>CI: Trigger CI workflow
+    CI->>TSC: Run tsc --strict --noEmit
+    alt TypeScript errors found
+        TSC-->>CI: Exit code 1
+        CI-->>GH: type-check FAILED
+        GH-->>Dev: PR blocked — fix TS errors
     else No errors
-        TSC-->>GH: Exit code 0
-        GH->>ESL: eslint src/ --max-warnings 0
-        alt ESLint violations
-            ESL-->>GH: Exit code 1
-            GH-->>PR: ❌ Check failed: ESLint violations
-            GH-->>MRG: Block merge
+        TSC-->>CI: Exit code 0
+        CI->>ESL: Run eslint src/ --max-warnings 0
+        alt ESLint violations found
+            ESL-->>CI: Exit code 1
+            CI-->>GH: type-check FAILED
+            GH-->>Dev: PR blocked — fix ESLint violations
         else No violations
-            ESL-->>GH: Exit code 0
-            GH->>GRP: grep ': any' in src/
-            alt any found
-                GRP-->>GH: Exit code 1
-                GH-->>PR: ❌ Check failed: explicit any found
-                GH-->>MRG: Block merge
-            else No any
-                GRP-->>GH: Exit code 0
-                GH-->>PR: ✅ All checks passed
-                GH-->>MRG: Allow merge
-            end
+            ESL-->>CI: Exit code 0
+            CI-->>GH: type-check PASSED
+            GH-->>Dev: PR unblocked
         end
     end
 ```
 
-### 9.2 Developer Violation Fix Flow
+### 6.3 Branch Protection Rule
+
+The `type-check` CI job must be added to the required status checks for the `main` branch:
+
+| Setting | Value |
+|---|---|
+| Required status check name | `TypeScript Strict Check` |
+| Require branches to be up to date | `true` |
+| Applies to | `main` branch |
+| Bypass allowed for | Repository admins only |
+
+---
+
+## 7. Component Architecture
+
+### 7.1 Affected Modules
+
+All modules under `frontend/src/` are in scope. The table below maps each module to its primary type-safety concern:
+
+| Module | Path | Primary Concern |
+|---|---|---|
+| Types | `src/types/` | Source of truth — zero `any` mandatory |
+| Components | `src/components/` | React prop types, event handler types |
+| Stores | `src/stores/` | Zustand state shape, action parameter types |
+| Hooks | `src/hooks/` | Return type annotations, generic constraints |
+| Engine | `src/engine/` | 3D math types, Three.js wrapper types |
+| Services | `src/services/` | API response types, serialization types |
+| Utils | `src/utils/` | Generic utility function signatures |
+| Errors | `src/errors/` | Custom error class hierarchies |
+
+### 7.2 Dependency Flow
+
+```mermaid
+graph TD
+    A[src/types/] -->|imported by| B[src/stores/]
+    A -->|imported by| C[src/engine/]
+    A -->|imported by| D[src/services/]
+    A -->|imported by| E[src/components/]
+    A -->|imported by| F[src/hooks/]
+    A -->|imported by| G[src/utils/]
+    B -->|imported by| E
+    C -->|imported by| E
+    D -->|imported by| F
+    F -->|imported by| E
+    G -->|imported by all|
+    H[src/errors/] -->|imported by| D
+    H -->|imported by| C
+```
+
+### 7.3 Type Annotation Requirements per Module
+
+#### `src/types/` — Domain Types
+- All exported interfaces and types must be fully annotated.
+- No `any`, no `object`, no `Function` (use specific signatures).
+- Use `readonly` for immutable fields.
+
+#### `src/components/` — React Components
+- All component props must have explicit interface definitions.
+- Event handlers: use `React.ChangeEvent<HTMLInputElement>`, `React.MouseEvent<HTMLButtonElement>`, etc.
+- `children` prop: use `React.ReactNode` (not `any`).
+- Ref types: use `React.RefObject<HTMLDivElement>` (not `any`).
+
+#### `src/stores/` — Zustand Stores
+- Store state interface must be fully typed.
+- Action functions must have explicit parameter and return types.
+- `immer` produce callbacks: use typed draft `Draft<StateType>`.
+
+#### `src/engine/` — 3D Engine
+- Three.js objects: use `THREE.Mesh`, `THREE.Scene`, etc. (not `any`).
+- Geometry/material types: use specific Three.js generics.
+- Raycaster intersections: use `THREE.Intersection<THREE.Object3D>`.
+
+#### `src/hooks/` — Custom Hooks
+- All hooks must declare explicit return types.
+- Generic hooks must use constrained type parameters.
+
+#### `src/services/` — Data Services
+- All service functions must have explicit return types.
+- JSON parsing must use `unknown` + type guards.
+- `localStorage` reads must use `unknown` + type guards.
+
+---
+
+## 8. Error Handling Strategy
+
+### 8.1 Type-Safe Error Handling
+
+With `useUnknownInCatchVariables: true`, all `catch` clauses receive `unknown`. The approved pattern:
+
+```typescript
+// Standard error handling pattern
+function handleError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  return 'An unknown error occurred';
+}
+
+// Usage in try/catch
+try {
+  await saveProject(project);
+} catch (error: unknown) {
+  const message = handleError(error);
+  showErrorToast(message);
+}
+```
+
+### 8.2 Custom Error Classes
+
+```typescript
+// src/errors/LegoBuilderError.ts
+export class LegoBuilderError extends Error {
+  readonly code: string;
+
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = 'LegoBuilderError';
+    this.code = code;
+    // Maintains proper prototype chain in transpiled code
+    Object.setPrototypeOf(this, LegoBuilderError.prototype);
+  }
+}
+
+export class BrickPlacementError extends LegoBuilderError {
+  readonly position: { x: number; y: number; z: number };
+
+  constructor(
+    message: string,
+    position: { x: number; y: number; z: number }
+  ) {
+    super(message, 'BRICK_PLACEMENT_ERROR');
+    this.position = position;
+    Object.setPrototypeOf(this, BrickPlacementError.prototype);
+  }
+}
+```
+
+---
+
+## 9. Security Considerations
+
+| Concern | Risk | Mitigation |
+|---|---|---|
+| `any` bypasses type checks | High — runtime errors, XSS via untyped DOM manipulation | `no-explicit-any: error` + `no-unsafe-*` rules |
+| JSON.parse from untrusted sources | Medium — unexpected shape causes runtime crash | `unknown` return type + type guards before use |
+| `as any` cast to bypass checks | High — silently disables type safety | ESLint `no-explicit-any` catches explicit casts |
+| Third-party library `any` leakage | Low — `skipLibCheck: true` isolates lib types | Wrapper types around third-party APIs |
+| `localStorage` data tampering | Medium — stored data may not match expected shape | `unknown` + type guard on all reads |
+
+---
+
+## 10. Sequence Diagrams
+
+### 10.1 Developer Workflow — Introducing a New Type
 
 ```mermaid
 sequenceDiagram
     participant Dev as Developer
-    participant IDE as IDE (VS Code)
-    participant Hook as Husky pre-commit
-    participant Repo as GitHub
+    participant Types as src/types/
+    participant Comp as src/components/
+    participant TSC as tsc --strict
+    participant ESL as eslint
 
-    Dev->>IDE: Write code with any type
-    IDE-->>Dev: Red squiggle (TypeScript error)
-    Dev->>Dev: Fix: replace any with proper type
-    Dev->>Hook: git commit
-    Hook->>Hook: lint-staged: eslint + tsc
-    Hook-->>Dev: ✅ Clean — commit accepted
-    Dev->>Repo: git push
-    Repo->>Repo: CI runs full check
-    Repo-->>Dev: ✅ PR checks pass
+    Dev->>Types: Define new interface (e.g., BrickTemplate)
+    Dev->>Comp: Import and use BrickTemplate
+    Dev->>TSC: Run locally: npm run type-check
+    alt Type error
+        TSC-->>Dev: Error: Property X missing
+        Dev->>Types: Fix interface definition
+        Dev->>TSC: Re-run type-check
+    else No errors
+        TSC-->>Dev: Clean
+        Dev->>ESL: Run locally: npm run lint
+        alt ESLint error
+            ESL-->>Dev: no-explicit-any violation
+            Dev->>Comp: Replace any with proper type
+            Dev->>ESL: Re-run lint
+        else No violations
+            ESL-->>Dev: Clean
+            Dev->>Dev: Commit and push
+        end
+    end
 ```
 
----
-
-## 10. Component Architecture
-
-This NFR does not introduce new UI components. Instead, it defines the **type infrastructure** that all components depend on.
-
-### 10.1 Type Dependency Graph
+### 10.2 CI Enforcement Flow
 
 ```mermaid
-graph TD
-    A[frontend/src/types/index.ts] --> B[brick.ts]
-    A --> C[scene.ts]
-    A --> D[commands.ts]
-    A --> E[project.ts]
+sequenceDiagram
+    participant PR as Pull Request
+    participant CI as CI Pipeline
+    participant TSC as tsc --strict --noEmit
+    participant ESL as eslint src/ --max-warnings 0
+    participant Gate as Branch Protection
 
-    F[components/ViewportCanvas.tsx] --> A
-    G[components/BrickPalette.tsx] --> A
-    H[stores/sceneStore.ts] --> A
-    I[stores/commandStore.ts] --> A
-    J[hooks/useBrickPlacement.ts] --> A
-    K[hooks/useUndoRedo.ts] --> A
-    L[utils/projectSerializer.ts] --> A
-
-    B --> C
-    D --> B
-    E --> B
+    PR->>CI: Push triggers workflow
+    CI->>TSC: Execute type check
+    TSC-->>CI: Result (pass/fail)
+    CI->>ESL: Execute lint check
+    ESL-->>CI: Result (pass/fail)
+    CI->>Gate: Report combined status
+    alt Both pass
+        Gate-->>PR: Status: PASS — merge allowed
+    else Either fails
+        Gate-->>PR: Status: FAIL — merge blocked
+    end
 ```
 
-### 10.2 Module Responsibilities
+---
 
-| Module | Responsibility | Type Exports |
-|---|---|---|
-| `types/brick.ts` | Brick entity types | `BrickId`, `PlacedBrick`, `BrickColor`, `BrickDimensions`, `BrickPosition`, `BrickRotation` |
-| `types/scene.ts` | Scene/camera state types | `SceneState`, `CameraState`, `GridConfig` |
-| `types/commands.ts` | Command pattern types | `Command`, `UndoableCommand`, `CommandType` |
-| `types/project.ts` | Project persistence types | `LegoProject`, `ProjectMetadata`, `SaveState` |
-| `types/index.ts` | Barrel re-export | All of the above |
+## 11. Implementation Plan
+
+### Phase 1: Configuration (No Code Changes)
+1. Update `frontend/tsconfig.json` — add `noUncheckedIndexedAccess`, `noImplicitReturns`, `noFallthroughCasesInSwitch`, `exactOptionalPropertyTypes`, `useUnknownInCatchVariables`.
+2. Update `frontend/eslint.config.js` — add `no-explicit-any: error` and companion `no-unsafe-*` rules for `src/**`.
+3. Add `tsconfig.test.json` for test-specific overrides.
+4. Add CI workflow file `.github/workflows/ci.yml` with `type-check` job.
+
+### Phase 2: Remediation (Fix Existing Violations)
+1. Run `tsc --strict --noEmit` locally — capture all errors.
+2. Run `eslint src/ --max-warnings 0` locally — capture all violations.
+3. Fix violations module by module, starting with `src/types/` (foundation).
+4. Order: `types/` → `errors/` → `utils/` → `services/` → `stores/` → `hooks/` → `engine/` → `components/`.
+
+### Phase 3: CI Integration
+1. Add `type-check` job to CI workflow.
+2. Add `TypeScript Strict Check` to required status checks on `main`.
+3. Verify CI passes on a clean branch.
 
 ---
 
-## 11. NFR Measurable Targets
-
-| Metric | Target | Measurement Method |
-|---|---|---|
-| TypeScript errors in CI | 0 | `tsc --strict --noEmit` exit code |
-| ESLint `any` violations in `src/` | 0 | `eslint --max-warnings 0` exit code |
-| `any` types in production files | 0 | `grep ': any'` count |
-| Type coverage (via `type-coverage`) | ≥ 99% | `npx type-coverage --at-least 99` |
-| Pre-commit hook catch rate | 100% | All violations caught before push |
-| CI type-check duration | < 30s | GitHub Actions step timing |
-
----
-
-## 12. Test Case Mapping
+## 12. Test Cases
 
 | Test ID | Description | Verification Method |
 |---|---|---|
-| T-BE-MAINT-002-01 | `tsc --strict --noEmit` reports zero errors on full codebase | CI step exit code = 0 |
-| T-BE-MAINT-002-02 | `eslint src/ --max-warnings 0` reports zero violations | CI step exit code = 0 |
-| T-BE-MAINT-002-03 (derived) | PR introducing `any` type causes CI failure | CI step exit code = 1 on test branch |
+| T-BE-MAINT-002-01 | `tsc --strict --noEmit` exits with code 0 on full codebase | CI job exit code |
+| T-BE-MAINT-002-02 | `eslint src/ --max-warnings 0` exits with code 0 | CI job exit code |
+| T-BE-MAINT-002-03 | PR introducing `any` type causes CI failure | Manual test: add `any`, open PR, verify CI fails |
+| T-BE-MAINT-002-04 | `unknown` + type guard pattern compiles cleanly | Unit test: compile type guard file |
 
 ---
 
-## 13. Implementation Checklist
+## 13. Acceptance Criteria Mapping
 
-The coding agent SHALL complete the following tasks:
-
-- [ ] Update `frontend/tsconfig.json` with all strict flags listed in §2.1
-- [ ] Create `frontend/tsconfig.test.json` extending base config (§2.2)
-- [ ] Update `.eslintrc.cjs` with all rules listed in §3.1
-- [ ] Create `frontend/src/types/brick.ts` with types from §4.2
-- [ ] Create `frontend/src/types/scene.ts` with types from §4.2
-- [ ] Create `frontend/src/types/commands.ts` with types from §4.2
-- [ ] Create `frontend/src/types/project.ts` with types from §4.2
-- [ ] Create `frontend/src/types/index.ts` barrel export (§4.2)
-- [ ] Add CI steps to `.github/workflows/ci.yml` (§5.1)
-- [ ] Configure `husky` + `lint-staged` in `package.json` (§6)
-- [ ] Create `.husky/pre-commit` hook script (§6)
-- [ ] Verify zero TypeScript errors with `tsc --strict --noEmit`
-- [ ] Verify zero ESLint violations with `eslint src/ --max-warnings 0`
-
----
-
-## 14. Open Questions / Assumptions
-
-| # | Question / Assumption | Resolution |
+| Acceptance Criterion | Design Element | Section |
 |---|---|---|
-| 1 | **Assumption:** `exactOptionalPropertyTypes` is disabled initially to reduce adoption friction. | Can be enabled in a follow-up NFR once all FRs are implemented. |
-| 2 | **Assumption:** Test files use `warn` severity for `no-explicit-any` to allow mock patterns. | If stricter test typing is desired, update the ESLint override to `error`. |
-| 3 | **Question:** Does the project use Zod for runtime validation? | Assumed yes based on §8.1 safe JSON parsing pattern. Coding agent should confirm. |
-| 4 | **Assumption:** `husky` is not yet installed in the scaffold. | Coding agent should run `npm install -D husky lint-staged` and `npx husky install`. |
+| `tsc --strict --noEmit` reports zero errors in CI | tsconfig.json strict flags + CI job | §3.1, §6.1 |
+| `no-explicit-any` reports zero violations on `src/` | ESLint rule + companion rules | §4.1, §4.2 |
+| PR introducing `any` fails CI | Branch protection + required status check | §6.3 |
 
 ---
 
-*Document generated by Spectra Design Agent — Gate 6a approval required before implementation.*
+## 14. Open Questions
+
+| # | Question | Impact | Owner |
+|---|---|---|---|
+| 1 | Should `noUncheckedIndexedAccess` be enabled? It is stricter than `strict: true` and may require many `?? defaultValue` additions. | Medium — may increase remediation effort | Tech Lead |
+| 2 | Should test files be fully strict or allow `no-explicit-any: warn`? | Low — affects test authoring ergonomics | Team |
+| 3 | Are there existing `// @ts-ignore` or `// @ts-expect-error` comments that suppress errors? | High — must be audited and removed or justified | Dev |
+
+---
+
+*Generated by Spectra Design Agent — Gate 6a approval required before implementation.*
