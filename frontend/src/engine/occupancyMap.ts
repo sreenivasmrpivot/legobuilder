@@ -1,29 +1,36 @@
-import type { Brick, BrickType } from '@/types/brick';
-import { BRICK_CATALOG } from './brickCatalog';
-
-type GridKey = `${number},${number},${number}`;
-
 export class OccupancyMap {
-  private grid: Map<GridKey, string> = new Map();
+  private grid: Map<string, string>;
 
-  canPlace(type: BrickType, position: [number, number, number]): boolean {
-    const cells = this.getCells(type, position);
-    return cells.every((cell) => !this.grid.has(cell));
+  constructor() {
+    this.grid = new Map();
   }
 
-  occupy(brick: Brick): void {
-    const cells = this.getCells(brick.type, brick.position);
-    cells.forEach((cell) => this.grid.set(cell, brick.id));
+  private key(x: number, y: number, z: number): string {
+    return `${x},${y},${z}`;
   }
 
-  release(brick: Brick): void {
-    const cells = this.getCells(brick.type, brick.position);
-    cells.forEach((cell) => this.grid.delete(cell));
+  occupy(brickId: string, positions: [number, number, number][]): void {
+    for (const [x, y, z] of positions) {
+      this.grid.set(this.key(x, y, z), brickId);
+    }
   }
 
-  getBrickAt(position: [number, number, number]): string | undefined {
-    const key: GridKey = `${position[0]},${position[1]},${position[2]}`;
-    return this.grid.get(key);
+  release(positions: [number, number, number][]): void {
+    for (const [x, y, z] of positions) {
+      this.grid.delete(this.key(x, y, z));
+    }
+  }
+
+  isOccupied(x: number, y: number, z: number): boolean {
+    return this.grid.has(this.key(x, y, z));
+  }
+
+  canPlace(positions: [number, number, number][]): boolean {
+    return positions.every(([x, y, z]) => !this.isOccupied(x, y, z));
+  }
+
+  getBrickAt(x: number, y: number, z: number): string | undefined {
+    return this.grid.get(this.key(x, y, z));
   }
 
   clear(): void {
@@ -32,23 +39,5 @@ export class OccupancyMap {
 
   get size(): number {
     return this.grid.size;
-  }
-
-  private getCells(type: BrickType, position: [number, number, number]): GridKey[] {
-    const def = BRICK_CATALOG[type];
-    if (!def) return [];
-
-    const cells: GridKey[] = [];
-    const [x, y, z] = position;
-
-    for (let dx = 0; dx < def.width; dx++) {
-      for (let dz = 0; dz < def.depth; dz++) {
-        for (let dy = 0; dy < def.height; dy++) {
-          cells.push(`${x + dx},${y + dy},${z + dz}`);
-        }
-      }
-    }
-
-    return cells;
   }
 }

@@ -1,23 +1,14 @@
-import type { BrickType, BrickDefinition } from '@/types/brick';
+import type { BrickType, BrickDefinition } from '../types/brick';
 
 export const BRICK_CATALOG: Record<BrickType, BrickDefinition> = {
-  'brick-2x4': { type: 'brick-2x4', name: '2×4 Brick', width: 2, depth: 4, height: 3, category: 'brick' },
-  'brick-2x2': { type: 'brick-2x2', name: '2×2 Brick', width: 2, depth: 2, height: 3, category: 'brick' },
-  'brick-1x1': { type: 'brick-1x1', name: '1×1 Brick', width: 1, depth: 1, height: 3, category: 'brick' },
-  'brick-1x2': { type: 'brick-1x2', name: '1×2 Brick', width: 1, depth: 2, height: 3, category: 'brick' },
-  'slope-2x2': { type: 'slope-2x2', name: '2×2 Slope', width: 2, depth: 2, height: 3, category: 'slope' },
-  'plate-1x4': { type: 'plate-1x4', name: '1×4 Plate', width: 1, depth: 4, height: 1, category: 'plate' },
+  '1x1': { type: '1x1', studsX: 1, studsZ: 1, height: 1, label: '1\u00d71 Brick' },
+  '2x1': { type: '2x1', studsX: 2, studsZ: 1, height: 1, label: '2\u00d71 Brick' },
+  '2x2': { type: '2x2', studsX: 2, studsZ: 2, height: 1, label: '2\u00d72 Brick' },
+  '2x4': { type: '2x4', studsX: 2, studsZ: 4, height: 1, label: '2\u00d74 Brick' },
+  '4x2': { type: '4x2', studsX: 4, studsZ: 2, height: 1, label: '4\u00d72 Brick' },
 };
 
-export const COLOR_PALETTE = [
-  '#D01012', // Red
-  '#0057A8', // Blue
-  '#00852B', // Green
-  '#FFD700', // Yellow
-  '#FFFFFF', // White
-  '#1B1B1B', // Black
-  '#FF7E14', // Orange
-  '#6B5A5A', // Dark Gray
-  '#A0A0A0', // Light Gray
-  '#8B4513', // Brown
-] as const;
+export const COLOR_PALETTE: string[] = [
+  '#D01012', '#0057A8', '#237841', '#FEC400', '#FFFFFF',
+  '#1B1B1B', '#F57D20', '#6B327B', '#00BCD4', '#8D7452',
+];

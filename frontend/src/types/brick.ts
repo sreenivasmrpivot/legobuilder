@@ -1,26 +1,17 @@
-export type BrickType =
-  | 'brick-2x4'
-  | 'brick-2x2'
-  | 'brick-1x1'
-  | 'brick-1x2'
-  | 'slope-2x2'
-  | 'plate-1x4';
-
-export type BrickCategory = 'brick' | 'plate' | 'slope';
+export type BrickType = '1x1' | '2x1' | '2x2' | '2x4' | '4x2';
 
 export interface BrickDefinition {
   type: BrickType;
-  name: string;
-  width: number;
-  depth: number;
+  studsX: number;
+  studsZ: number;
   height: number;
-  category: BrickCategory;
+  label: string;
 }
 
 export interface Brick {
   id: string;
   type: BrickType;
   position: [number, number, number];
-  rotation: number; // 0, 90, 180, 270
+  rotation: number;
   color: string;
 }

@@ -1,48 +1,37 @@
-import type { Command } from '@/types/commands';
-import type { Brick } from '@/types/brick';
-import type { SceneState } from '@/stores/sceneStore';
-import { OccupancyMap } from './occupancyMap';
+import type { Command } from '../types/command';
+import type { Brick } from '../types/brick';
 
 export class PlaceBrickCommand implements Command {
-  readonly description: string;
-
-  constructor(
-    private brick: Brick,
-    private sceneStore: SceneState,
-    private occupancyMap: OccupancyMap
-  ) {
-    this.description = `Place ${brick.type} at ${brick.position}`;
-  }
-
-  execute(): void {
-    this.sceneStore.addBrick(this.brick);
-    this.occupancyMap.occupy(this.brick);
-  }
-
-  undo(): void {
-    this.sceneStore.removeBrick(this.brick.id);
-    this.occupancyMap.release(this.brick);
-  }
+  constructor(private _brick: Brick) {}
+  execute(): void { /* stub */ }
+  undo(): void { /* stub */ }
+  get description(): string { return `Place ${this._brick.type} at ${this._brick.position}`; }
 }
 
-export class RemoveBrickCommand implements Command {
-  readonly description: string;
+export class DeleteBrickCommand implements Command {
+  constructor(private _brick: Brick) {}
+  execute(): void { /* stub */ }
+  undo(): void { /* stub */ }
+  get description(): string { return `Delete ${this._brick.type}`; }
+}
 
-  constructor(
-    private brick: Brick,
-    private sceneStore: SceneState,
-    private occupancyMap: OccupancyMap
-  ) {
-    this.description = `Remove ${brick.type} from ${brick.position}`;
-  }
+export class MoveBrickCommand implements Command {
+  constructor(private _brickId: string, private _from: [number, number, number], private _to: [number, number, number]) {}
+  execute(): void { /* stub */ }
+  undo(): void { /* stub */ }
+  get description(): string { return `Move brick from ${this._from} to ${this._to}`; }
+}
 
-  execute(): void {
-    this.sceneStore.removeBrick(this.brick.id);
-    this.occupancyMap.release(this.brick);
-  }
+export class RotateBrickCommand implements Command {
+  constructor(private _brickId: string, private _fromRotation: number, private _toRotation: number) {}
+  execute(): void { /* stub */ }
+  undo(): void { /* stub */ }
+  get description(): string { return `Rotate brick to ${this._toRotation}`; }
+}
 
-  undo(): void {
-    this.sceneStore.addBrick(this.brick);
-    this.occupancyMap.occupy(this.brick);
-  }
+export class ChangeBrickColorCommand implements Command {
+  constructor(private _brickId: string, private _fromColor: string, private _toColor: string) {}
+  execute(): void { /* stub */ }
+  undo(): void { /* stub */ }
+  get description(): string { return `Change color to ${this._toColor}`; }
 }
