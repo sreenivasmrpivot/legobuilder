@@ -1,0 +1,63 @@
+{
+  "handoff_id": "026_design_nfr_rel_001_complete",
+  "from_agent": "design-agent",
+  "to_agent": "frontend-test",
+  "timestamp": "2026-04-12T16:02:03Z",
+  "status": "complete",
+  "app_id": "app-legobuilder-20260410",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "issue_number": 35,
+  "fr_id": "NFR-REL-001",
+  "summary": "Design agent produced LLD v2.0 for NFR-REL-001 (Auto-Save Crash Durability). The LLD is a post-implementation verified document incorporating all learnings from the full implementation cycle (PRs #48, #75, #77, #80-84). Key verified facts: detectOrphanedSession() is the correct API name, 30s auto-save interval, fake-indexeddb/auto for unit tests, browser.close({ runBeforeUnload: false }) for crash simulation, idb in dependencies (not devDependencies).",
+  "artifacts": [
+    {
+      "name": "LOW_LEVEL_DESIGN.md",
+      "path": "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
+      "type": "design",
+      "description": "Full LLD v2.0: IndexedDB schema, service interfaces, Zustand store contract, hook contract, 4 sequence diagrams, atomicity guarantee, error handling, security, performance budget, accessibility, test case mapping, implementation checklist"
+    },
+    {
+      "name": "026_design_nfr_rel_001_complete.json",
+      "path": "docs/handoffs/026_design_nfr_rel_001_complete.json",
+      "type": "handoff",
+      "description": "Machine-readable handoff artifact"
+    },
+    {
+      "name": "026_design_nfr_rel_001_HANDOFF.md",
+      "path": "docs/handoffs/026_design_nfr_rel_001_HANDOFF.md",
+      "type": "handoff",
+      "description": "Human-readable handoff summary"
+    }
+  ],
+  "workflow_state": {
+    "workflow_type": "pure_greenfield",
+    "current_phase": "design",
+    "completed_phases": ["research", "pm", "architecture", "design"],
+    "remaining_phases": ["frontend-test", "frontend-coding", "frontend-review", "release"]
+  },
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md for full interface contracts",
+      "Use detectOrphanedSession() (NOT detectCrash()) as the crash detection API",
+      "Use 30s auto-save interval (AUTO_SAVE_INTERVAL_MS = 30_000)",
+      "Use fake-indexeddb/auto for Vitest unit tests (devDependency)",
+      "Use browser.close({ runBeforeUnload: false }) for Playwright crash simulation",
+      "Ensure idb is in dependencies (not devDependencies) — required at runtime",
+      "All data-testid selectors: resume-prompt, resume-prompt-brick-count, resume-btn, discard-btn, add-brick-btn, brick-instance, auto-save-status"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
+      "docs/features/FR-PERS-001/LOW_LEVEL_DESIGN.md",
+      "docs/features/FR-PERS-002/LOW_LEVEL_DESIGN.md"
+    ]
+  },
+  "human_review_required": [
+    {
+      "item": "LLD v2.0 design review",
+      "reason": "Gate 6a — design must be approved before implementation proceeds",
+      "severity": "high"
+    }
+  ],
+  "area": "frontend",
+  "pr_branch": "feature/35-nfr-rel-001-design-v2"
+}
