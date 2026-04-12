@@ -1,251 +1,318 @@
-# Low-Level Design: NFR-A11Y-001
-## Keyboard Navigation Accessibility — Toolbar & Palette
+# Low-Level Design: NFR-A11Y-001 — Keyboard Navigation for Toolbar & Palette
 
 **FR-ID:** NFR-A11Y-001  
-**Issue:** [#33](https://github.com/sreenivasmrpivot/legobuilder/issues/33)  
-**Status:** Draft — Awaiting Gate 6a Design Review  
-**Area:** Frontend  
-**Dependencies:** FR-UI-001 (Issue #23), FR-UI-002 (Issue #24)  
-**Test Cases:** T-A11Y-A11Y-001-01, T-A11Y-A11Y-001-02, T-A11Y-A11Y-001-03, T-A11Y-A11Y-001-04  
+**Issue:** #33  
+**Title:** Ensure all toolbar and palette actions are keyboard-navigable (Tab, Enter, arrow keys)  
+**Status:** Draft — Pending Design Review (Gate 6a)  
+**Date:** 2026-04-12  
+**Author:** Spectra Design Agent  
 
 ---
 
 ## 1. Overview
 
-This document defines the low-level design for ensuring all toolbar and palette actions in the LegoBuilder application are fully keyboard-navigable in compliance with WCAG 2.1 AA. The design covers:
+This document provides the low-level design for implementing WCAG 2.1 AA-compliant keyboard navigation across all toolbar buttons and the brick palette in the LegoBuilder React application. The feature ensures that every interactive UI element is reachable and operable via keyboard alone (Tab, Shift+Tab, Enter, Space, and arrow keys), and that zero axe-core violations are reported on non-3D UI elements.
 
-- Tab-order management for the 7 toolbar buttons
-- Arrow-key navigation within the `BrickPalette` component
-- Enter/Space key activation for all interactive elements
-- axe-core integration for automated accessibility auditing
-- ARIA attribute strategy for non-native interactive elements
+### 1.1 Scope
 
-The 3D canvas (`<canvas>`) is explicitly excluded from the accessibility audit scope as it is inherently inaccessible to screen readers.
+| Component | Keyboard Behaviour Required |
+|-----------|-----------------------------|
+| `Toolbar` | Tab through all 7 buttons in DOM order; Enter/Space activates |
+| `BrickPalette` | Arrow keys navigate between brick types; Enter/Space selects |
+| `App` (root) | axe-core audit in dev; jest-axe in tests |
+| `<canvas>` (Three.js) | **Excluded** from a11y audit — inherently inaccessible |
+
+### 1.2 Dependencies
+
+- **#23 FR-UI-001** — Toolbar component must exist before keyboard attributes are added.
+- **#24 FR-UI-002** — BrickPalette component must exist before arrow-key handler is added.
 
 ---
 
 ## 2. Component Architecture
 
-### 2.1 Component Tree (Affected Components)
+### 2.1 Module Map
 
 ```
-App
-├── Toolbar                        ← Tab-order: 7 native <button> elements
-│   ├── ToolbarButton (×7)         ← Native <button>, no tabIndex manipulation
-│   └── ToolbarDivider             ← aria-hidden="true", not focusable
-├── BrickPalette                   ← Arrow-key roving tabIndex container
-│   ├── PaletteHeader              ← Static, aria-label="Brick Palette"
-│   ├── BrickCategoryList          ← role="listbox", aria-label="Brick categories"
-│   │   └── BrickCategoryItem (×N) ← role="option", tabIndex managed by roving
-│   └── BrickItemGrid              ← role="listbox", aria-label="Brick types"
-│       └── BrickItem (×M)         ← role="option", tabIndex managed by roving
-└── ViewportCanvas                 ← aria-hidden="true", tabIndex={-1}
+src/
+├── components/
+│   ├── Toolbar/
+│   │   ├── Toolbar.tsx          ← Add aria-label, ensure <button> elements
+│   │   └── Toolbar.test.tsx     ← jest-axe + keyboard interaction tests
+│   ├── BrickPalette/
+│   │   ├── BrickPalette.tsx     ← Add onKeyDown arrow-key handler + roving tabIndex
+│   │   └── BrickPalette.test.tsx← jest-axe + arrow-key navigation tests
+│   └── App/
+│       └── App.tsx              ← Mount @axe-core/react in development mode
+├── hooks/
+│   └── useRovingTabIndex.ts     ← NEW: reusable roving tabIndex hook
+└── utils/
+    └── a11y.ts                  ← NEW: shared a11y helpers (key constants, etc.)
 ```
 
-### 2.2 Module Responsibilities
+### 2.2 Component Interfaces
 
-| Module | File Path | Responsibility |
-|--------|-----------|----------------|
-| `Toolbar` | `src/components/Toolbar/Toolbar.tsx` | Renders 7 toolbar buttons in DOM order; relies on natural tab flow |
-| `ToolbarButton` | `src/components/Toolbar/ToolbarButton.tsx` | Native `<button>` element; receives `aria-label`, `aria-pressed` |
-| `BrickPalette` | `src/components/BrickPalette/BrickPalette.tsx` | Owns roving tabIndex state; handles `onKeyDown` for arrow navigation |
-| `BrickCategoryList` | `src/components/BrickPalette/BrickCategoryList.tsx` | `role="listbox"` container for category items |
-| `BrickCategoryItem` | `src/components/BrickPalette/BrickCategoryItem.tsx` | `role="option"`, receives `tabIndex` from parent roving state |
-| `BrickItemGrid` | `src/components/BrickPalette/BrickItemGrid.tsx` | `role="listbox"` container for brick type items |
-| `BrickItem` | `src/components/BrickPalette/BrickItem.tsx` | `role="option"`, receives `tabIndex` from parent roving state |
-| `useRovingTabIndex` | `src/hooks/useRovingTabIndex.ts` | Custom hook encapsulating roving tabIndex logic |
-| `useKeyboardNav` | `src/hooks/useKeyboardNav.ts` | Generic keyboard event handler factory (ArrowUp/Down/Left/Right/Home/End) |
-| `axeDevSetup` | `src/utils/axeDevSetup.ts` | Initialises `@axe-core/react` in development mode only |
-
----
-
-## 3. Data Models & State
-
-### 3.1 Roving TabIndex State (BrickPalette)
-
-No global store changes are required. Keyboard navigation state is **local** to the `BrickPalette` component via the `useRovingTabIndex` hook.
+#### `Toolbar` Component
 
 ```typescript
-// useRovingTabIndex.ts
-interface RovingTabIndexState {
-  /** Index of the currently "active" (tabIndex=0) item within the list */
-  activeIndex: number;
-  /** Total number of items in the navigable list */
-  itemCount: number;
-  /** Whether navigation wraps at boundaries (true = wrap, false = clamp) */
-  wrap: boolean;
+// src/components/Toolbar/Toolbar.tsx
+interface ToolbarProps {
+  onAddBrick: () => void;
+  onDeleteBrick: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  onSave: () => void;
+  onLoad: () => void;
+  onExport: () => void;
 }
 
-interface RovingTabIndexActions {
-  /** Move focus to the next item */
-  moveNext: () => void;
-  /** Move focus to the previous item */
-  movePrev: () => void;
-  /** Move focus to the first item */
-  moveFirst: () => void;
-  /** Move focus to the last item */
-  moveLast: () => void;
-  /** Set active index directly (e.g., on mouse click) */
-  setActiveIndex: (index: number) => void;
-  /** Get tabIndex value for item at position i */
-  getTabIndex: (i: number) => 0 | -1;
-}
+// Accessibility contract:
+// - Each action maps to a native <button> element
+// - aria-label describes the action (e.g., aria-label="Add Brick")
+// - No tabIndex manipulation — natural DOM order provides logical tab sequence
+// - role="toolbar" on the container with aria-label="Editor Toolbar"
 ```
 
-### 3.2 Toolbar State (No Change)
-
-The Toolbar uses native `<button>` elements in DOM order. No additional state is needed for keyboard navigation — the browser handles Tab focus natively. The existing `toolStore` (Zustand) tracks the active tool; `aria-pressed` is derived from this store.
+#### `BrickPalette` Component
 
 ```typescript
-// Existing toolStore shape (read-only for this NFR)
-interface ToolState {
-  activeTool: 'select' | 'place' | 'delete' | 'rotate' | 'color' | 'undo' | 'redo';
-  setActiveTool: (tool: ToolState['activeTool']) => void;
-}
-```
-
-### 3.3 ARIA Attribute Map
-
-| Element | Role | aria-label | aria-pressed | tabIndex | Notes |
-|---------|------|------------|--------------|----------|-------|
-| `<button>` (Toolbar) | implicit `button` | Tool name (e.g., "Select tool") | `true`/`false` based on `activeTool` | default (0) | Native button; no override needed |
-| `BrickCategoryItem` | `option` | Category name | — | 0 (active) / -1 | Roving tabIndex |
-| `BrickItem` | `option` | Brick name + dimensions | — | 0 (active) / -1 | Roving tabIndex |
-| `ViewportCanvas` | — | — | — | -1 | `aria-hidden="true"` |
-| `ToolbarDivider` | — | — | — | — | `aria-hidden="true"` |
-
----
-
-## 4. API / Prop Contracts
-
-### 4.1 `useRovingTabIndex` Hook
-
-```typescript
-/**
- * Custom hook implementing the ARIA roving tabIndex pattern.
- * @see https://www.w3.org/WAI/ARIA/apg/practices/keyboard-interface/#kbd_roving_tabindex
- */
-function useRovingTabIndex(options: {
-  itemCount: number;
-  initialIndex?: number;  // default: 0
-  wrap?: boolean;         // default: true
-  orientation?: 'horizontal' | 'vertical' | 'both'; // default: 'vertical'
-}): RovingTabIndexState & RovingTabIndexActions;
-```
-
-### 4.2 `useKeyboardNav` Hook
-
-```typescript
-/**
- * Factory hook that returns an onKeyDown handler for list navigation.
- * Handles: ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End.
- */
-function useKeyboardNav(options: {
-  onNext: () => void;
-  onPrev: () => void;
-  onFirst: () => void;
-  onLast: () => void;
-  orientation?: 'horizontal' | 'vertical' | 'both'; // default: 'vertical'
-}): (event: React.KeyboardEvent) => void;
-```
-
-### 4.3 `ToolbarButton` Props
-
-```typescript
-interface ToolbarButtonProps {
-  /** Unique tool identifier */
-  tool: ToolState['activeTool'];
-  /** Accessible label for screen readers */
-  ariaLabel: string;
-  /** Icon component to render */
-  icon: React.ReactNode;
-  /** Click handler */
-  onClick: () => void;
-  /** Whether this button is currently active (maps to aria-pressed) */
-  isActive?: boolean;
-  /** Optional keyboard shortcut hint for tooltip */
-  shortcutHint?: string;
-}
-```
-
-### 4.4 `BrickPalette` Props (Updated)
-
-```typescript
+// src/components/BrickPalette/BrickPalette.tsx
 interface BrickPaletteProps {
-  /** List of available brick categories */
-  categories: BrickCategory[];
-  /** Currently selected category ID */
-  selectedCategoryId: string | null;
-  /** Callback when a category is selected */
-  onCategorySelect: (categoryId: string) => void;
-  /** Callback when a brick type is selected */
-  onBrickSelect: (brickTypeId: string) => void;
-  /** Currently selected brick type ID */
-  selectedBrickTypeId: string | null;
+  brickTypes: BrickType[];
+  selectedBrickType: string;
+  onSelectBrickType: (type: string) => void;
+}
+
+interface BrickType {
+  id: string;
+  label: string;
+  color: string;
+  dimensions: { width: number; height: number; depth: number };
+}
+
+// Accessibility contract:
+// - Container: role="listbox" aria-label="Brick Types" aria-orientation="vertical"
+// - Each item: role="option" aria-selected={isSelected} tabIndex={isActive ? 0 : -1}
+// - Roving tabIndex pattern: only one item in tab sequence at a time
+// - Arrow keys move focus; Enter/Space selects
+```
+
+#### `useRovingTabIndex` Hook
+
+```typescript
+// src/hooks/useRovingTabIndex.ts
+interface UseRovingTabIndexOptions {
+  itemCount: number;
+  orientation?: 'horizontal' | 'vertical' | 'both';
+  wrap?: boolean; // wrap around at boundaries (default: true)
+}
+
+interface UseRovingTabIndexReturn {
+  activeIndex: number;
+  setActiveIndex: (index: number) => void;
+  getItemProps: (index: number) => {
+    tabIndex: 0 | -1;
+    onKeyDown: React.KeyboardEventHandler;
+    'data-active': boolean;
+  };
+}
+
+export function useRovingTabIndex(
+  options: UseRovingTabIndexOptions
+): UseRovingTabIndexReturn;
+```
+
+---
+
+## 3. Detailed Design
+
+### 3.1 Toolbar — Keyboard Navigation
+
+**Strategy:** Use native `<button>` elements in DOM order. No `tabIndex` manipulation is needed because the browser's default tab order follows DOM order.
+
+**ARIA Roles & Attributes:**
+
+| Element | Role | Attributes |
+|---------|------|------------|
+| `<div>` container | `toolbar` | `aria-label="Editor Toolbar"` |
+| Each `<button>` | `button` (implicit) | `aria-label="<Action Name>"`, `type="button"` |
+
+**Tab Order (DOM order = logical order):**
+
+```
+[Add Brick] → [Delete Brick] → [Undo] → [Redo] → [Save] → [Load] → [Export]
+  Tab 1          Tab 2         Tab 3    Tab 4    Tab 5    Tab 6    Tab 7
+```
+
+**Activation:** Enter and Space both trigger `onClick` natively on `<button>` elements — no extra handler needed.
+
+**Focus Visibility:** CSS `:focus-visible` outline must be present. Minimum contrast ratio 3:1 against adjacent colours (WCAG 2.1 SC 1.4.11).
+
+```css
+/* Toolbar.module.css */
+.toolbarButton:focus-visible {
+  outline: 2px solid #005fcc;
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 ```
 
-### 4.5 `axeDevSetup` Utility
+### 3.2 BrickPalette — Arrow Key Navigation (Roving tabIndex)
+
+**Strategy:** Implement the [ARIA Listbox pattern](https://www.w3.org/WAI/ARIA/apg/patterns/listbox/) with a roving `tabIndex`. Only the currently active item has `tabIndex={0}`; all others have `tabIndex={-1}`.
+
+**Key Bindings:**
+
+| Key | Action |
+|-----|--------|
+| `ArrowDown` | Move focus to next brick type (wraps to first) |
+| `ArrowUp` | Move focus to previous brick type (wraps to last) |
+| `Home` | Move focus to first brick type |
+| `End` | Move focus to last brick type |
+| `Enter` / `Space` | Select focused brick type |
+| `Tab` | Exit palette, move to next focusable element |
+
+**`onKeyDown` Handler Logic:**
 
 ```typescript
-/**
- * Initialises @axe-core/react in development mode.
- * Must be called once in the application entry point (main.tsx).
- * No-op in production builds.
- */
-function initAxeDev(): void;
-
-// Usage in main.tsx:
-// if (import.meta.env.DEV) { initAxeDev(); }
+const handleKeyDown = (e: React.KeyboardEvent, index: number) => {
+  const count = brickTypes.length;
+  switch (e.key) {
+    case 'ArrowDown':
+      e.preventDefault();
+      setActiveIndex((index + 1) % count);
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      setActiveIndex((index - 1 + count) % count);
+      break;
+    case 'Home':
+      e.preventDefault();
+      setActiveIndex(0);
+      break;
+    case 'End':
+      e.preventDefault();
+      setActiveIndex(count - 1);
+      break;
+    case 'Enter':
+    case ' ':
+      e.preventDefault();
+      onSelectBrickType(brickTypes[index].id);
+      break;
+    default:
+      break;
+  }
+};
 ```
+
+**Focus Management:** When `activeIndex` changes, call `.focus()` on the newly active item's DOM node via a `useEffect` + `useRef` array.
+
+```typescript
+const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+useEffect(() => {
+  itemRefs.current[activeIndex]?.focus();
+}, [activeIndex]);
+```
+
+### 3.3 axe-core Integration
+
+#### Development Mode (`@axe-core/react`)
+
+Mount in `App.tsx` only when `process.env.NODE_ENV === 'development'`:
+
+```typescript
+// src/components/App/App.tsx
+import React from 'react';
+import ReactDOM from 'react-dom';
+
+if (process.env.NODE_ENV === 'development') {
+  import('@axe-core/react').then(({ default: axe }) => {
+    axe(React, ReactDOM, 1000);
+  });
+}
+```
+
+This logs WCAG violations to the browser console during development. The 3D `<canvas>` element is excluded by default because axe-core does not audit canvas content.
+
+#### Test Mode (`jest-axe`)
+
+Each component test file includes an axe audit:
+
+```typescript
+// src/components/Toolbar/Toolbar.test.tsx
+import { axe, toHaveNoViolations } from 'jest-axe';
+import { render } from '@testing-library/react';
+import Toolbar from './Toolbar';
+
+expect.extend(toHaveNoViolations);
+
+test('Toolbar has no axe violations', async () => {
+  const { container } = render(<Toolbar {...mockProps} />);
+  const results = await axe(container);
+  expect(results).toHaveNoViolations();
+});
+```
+
+---
+
+## 4. Data Models
+
+This NFR does not introduce new data entities. It augments existing component state:
+
+### 4.1 BrickPalette State Extension
+
+```typescript
+// Existing state (from FR-UI-002 LLD)
+const [selectedBrickType, setSelectedBrickType] = useState<string>(brickTypes[0].id);
+
+// NEW: keyboard focus tracking (local UI state, not persisted)
+const [activeIndex, setActiveIndex] = useState<number>(0);
+```
+
+### 4.2 No New API Endpoints
+
+Keyboard navigation is a pure client-side concern. No backend API changes are required.
 
 ---
 
 ## 5. Sequence Diagrams
 
-### 5.1 Toolbar Tab Navigation
+### 5.1 Tab Navigation Through Toolbar
 
 ```mermaid
 sequenceDiagram
     participant User
     participant Browser
     participant Toolbar
-    participant ToolbarButton
-    participant ToolStore
 
     User->>Browser: Press Tab
-    Browser->>Toolbar: Focus moves to first <button> (DOM order)
-    Browser->>ToolbarButton: :focus pseudo-class applied
-    Note over ToolbarButton: Focus ring visible (outline: 2px solid)
-    User->>Browser: Press Tab again
-    Browser->>ToolbarButton: Focus moves to next <button>
+    Browser->>Toolbar: Focus first <button> (Add Brick)
+    Note over Toolbar: :focus-visible outline appears
+    User->>Browser: Press Tab
+    Browser->>Toolbar: Focus second <button> (Delete Brick)
     User->>Browser: Press Enter
-    Browser->>ToolbarButton: click() event fired
-    ToolbarButton->>ToolStore: setActiveTool(tool)
-    ToolStore-->>ToolbarButton: Re-render with aria-pressed="true"
+    Toolbar->>Toolbar: onClick() fires → onDeleteBrick()
+    Note over Toolbar: Action executes; focus remains on button
 ```
 
-### 5.2 BrickPalette Arrow Key Navigation
+### 5.2 Arrow Key Navigation in BrickPalette
 
 ```mermaid
 sequenceDiagram
     participant User
     participant BrickPalette
     participant useRovingTabIndex
-    participant BrickItem
-    participant DOM
 
-    User->>BrickPalette: Tab into palette (first item gets focus)
-    BrickPalette->>useRovingTabIndex: getTabIndex(0) → 0 (first item active)
-    BrickItem->>DOM: tabIndex=0 on first item
+    User->>BrickPalette: Tab into palette (activeIndex=0 gets focus)
     User->>BrickPalette: Press ArrowDown
-    BrickPalette->>useRovingTabIndex: moveNext()
-    useRovingTabIndex-->>BrickPalette: activeIndex = 1
-    BrickPalette->>DOM: tabIndex=-1 on item[0], tabIndex=0 on item[1]
-    BrickPalette->>DOM: item[1].focus()
+    BrickPalette->>useRovingTabIndex: setActiveIndex(1)
+    useRovingTabIndex->>BrickPalette: tabIndex[0]=-1, tabIndex[1]=0
+    BrickPalette->>BrickPalette: itemRefs[1].focus()
+    Note over BrickPalette: Focus moves to second brick type
     User->>BrickPalette: Press Enter
-    BrickPalette->>BrickItem: onClick() triggered
-    BrickItem-->>BrickPalette: onBrickSelect(brickTypeId)
+    BrickPalette->>BrickPalette: onSelectBrickType(brickTypes[1].id)
+    Note over BrickPalette: Brick type selected; aria-selected updates
 ```
 
 ### 5.3 axe-core Audit Flow (Development)
@@ -253,277 +320,91 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant DevServer
-    participant main.tsx
-    participant axeDevSetup
+    participant App
     participant AxeCore
-    participant BrowserConsole
+    participant Console
 
-    DevServer->>main.tsx: App starts (DEV mode)
-    main.tsx->>axeDevSetup: initAxeDev()
-    axeDevSetup->>AxeCore: axe(React, ReactDOM, 1000)
-    Note over AxeCore: Runs audit every 1000ms after render
-    AxeCore->>BrowserConsole: Reports violations (if any)
-    Note over BrowserConsole: Zero violations expected for non-3D UI
-```
-
-### 5.4 jest-axe Component Test Flow
-
-```mermaid
-sequenceDiagram
-    participant TestRunner
-    participant ComponentTest
-    participant jestAxe
-    participant AxeCore
-
-    TestRunner->>ComponentTest: Run T-A11Y-A11Y-001-04
-    ComponentTest->>ComponentTest: render(<Toolbar /> | <BrickPalette />)
-    ComponentTest->>jestAxe: const results = await axe(container)
-    jestAxe->>AxeCore: Run WCAG 2.1 AA ruleset
-    AxeCore-->>jestAxe: violations[]
-    jestAxe-->>ComponentTest: results
-    ComponentTest->>ComponentTest: expect(results).toHaveNoViolations()
-    ComponentTest-->>TestRunner: PASS / FAIL
+    DevServer->>App: NODE_ENV=development
+    App->>AxeCore: import('@axe-core/react') → axe(React, ReactDOM, 1000ms)
+    Note over AxeCore: Runs after every render (1s debounce)
+    AxeCore->>AxeCore: Audit DOM (excludes <canvas>)
+    alt Violations found
+        AxeCore->>Console: console.error(violations)
+    else No violations
+        AxeCore->>Console: (silent)
+    end
 ```
 
 ---
 
-## 6. Implementation Details
+## 6. Error Handling Strategy
 
-### 6.1 Toolbar — Native Tab Order
-
-The Toolbar renders 7 `<button>` elements in DOM order. No `tabIndex` manipulation is required. The browser's natural tab order follows DOM sequence.
-
-**Key implementation rules:**
-- All 7 buttons MUST be native `<button>` elements (not `<div>` or `<span>`).
-- Each button MUST have a descriptive `aria-label` (e.g., `"Select tool (S)"`).
-- Active tool button MUST have `aria-pressed="true"`; inactive buttons `aria-pressed="false"`.
-- Focus ring MUST be visible: `outline: 2px solid #005FCC; outline-offset: 2px;` (do NOT use `outline: none`).
-- Keyboard shortcut hints displayed in tooltip via `title` attribute or `aria-describedby`.
-
-**Toolbar button order (DOM sequence = Tab order):**
-
-| Tab Position | Tool | aria-label | Keyboard Shortcut |
-|-------------|------|------------|-------------------|
-| 1 | Select | "Select tool (S)" | S |
-| 2 | Place | "Place brick (P)" | P |
-| 3 | Delete | "Delete brick (D)" | D |
-| 4 | Rotate | "Rotate brick (R)" | R |
-| 5 | Color | "Change color (C)" | C |
-| 6 | Undo | "Undo (Ctrl+Z)" | Ctrl+Z |
-| 7 | Redo | "Redo (Ctrl+Y)" | Ctrl+Y |
-
-### 6.2 BrickPalette — Roving TabIndex Pattern
-
-The `BrickPalette` implements the [ARIA Roving TabIndex](https://www.w3.org/WAI/ARIA/apg/practices/keyboard-interface/#kbd_roving_tabindex) pattern:
-
-- Only ONE item in the palette has `tabIndex=0` at any time (the "active" item).
-- All other items have `tabIndex=-1`.
-- Arrow keys move the active index and call `.focus()` on the newly active item's DOM node.
-- `Home` key moves to the first item; `End` key moves to the last item.
-- Navigation wraps at boundaries (ArrowDown on last item → first item).
-
-**Two-level navigation:**
-1. **Category level** (`BrickCategoryList`): ArrowUp/ArrowDown navigates between categories. Selecting a category (Enter/Space) expands it and moves focus to the first brick item.
-2. **Item level** (`BrickItemGrid`): ArrowUp/ArrowDown/ArrowLeft/ArrowRight navigates the grid. Escape returns focus to the category level.
-
-```typescript
-// BrickPalette.tsx — simplified onKeyDown handler
-const handleCategoryKeyDown = (e: React.KeyboardEvent, index: number) => {
-  switch (e.key) {
-    case 'ArrowDown': e.preventDefault(); categoryNav.moveNext(); break;
-    case 'ArrowUp':   e.preventDefault(); categoryNav.movePrev(); break;
-    case 'Home':      e.preventDefault(); categoryNav.moveFirst(); break;
-    case 'End':       e.preventDefault(); categoryNav.moveLast(); break;
-    case 'Enter':
-    case ' ':         e.preventDefault(); handleCategorySelect(index); break;
-  }
-};
-
-const handleItemKeyDown = (e: React.KeyboardEvent, index: number) => {
-  switch (e.key) {
-    case 'ArrowDown':  e.preventDefault(); itemNav.moveNext(); break;
-    case 'ArrowUp':    e.preventDefault(); itemNav.movePrev(); break;
-    case 'ArrowRight': e.preventDefault(); itemNav.moveNext(); break;
-    case 'ArrowLeft':  e.preventDefault(); itemNav.movePrev(); break;
-    case 'Home':       e.preventDefault(); itemNav.moveFirst(); break;
-    case 'End':        e.preventDefault(); itemNav.moveLast(); break;
-    case 'Escape':     e.preventDefault(); returnFocusToCategory(); break;
-    case 'Enter':
-    case ' ':          e.preventDefault(); handleBrickSelect(index); break;
-  }
-};
-```
-
-### 6.3 Focus Management — DOM Ref Strategy
-
-```typescript
-// useRovingTabIndex.ts — focus management
-const itemRefs = useRef<(HTMLElement | null)[]>([]);
-
-const focusItem = useCallback((index: number) => {
-  setActiveIndex(index);
-  // Use requestAnimationFrame to ensure tabIndex update is committed before focus
-  requestAnimationFrame(() => {
-    itemRefs.current[index]?.focus();
-  });
-}, []);
-
-// Expose ref setter for child components
-const setItemRef = useCallback((index: number) => (
-  (el: HTMLElement | null) => { itemRefs.current[index] = el; }
-), []);
-```
-
-### 6.4 axe-core Integration
-
-**Development runtime (`@axe-core/react`):**
-
-```typescript
-// src/utils/axeDevSetup.ts
-import React from 'react';
-import ReactDOM from 'react-dom';
-
-export function initAxeDev(): void {
-  if (process.env.NODE_ENV !== 'development') return;
-  import('@axe-core/react').then(({ default: axe }) => {
-    axe(React, ReactDOM, 1000);
-  });
-}
-```
-
-**Test-time (`jest-axe`):**
-
-```typescript
-// Example: Toolbar.a11y.test.tsx
-import { render } from '@testing-library/react';
-import { axe, toHaveNoViolations } from 'jest-axe';
-import { Toolbar } from './Toolbar';
-
-expect.extend(toHaveNoViolations);
-
-test('T-A11Y-A11Y-001-04: Toolbar has no WCAG 2.1 AA violations', async () => {
-  const { container } = render(<Toolbar />);
-  const results = await axe(container, {
-    runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] },
-  });
-  expect(results).toHaveNoViolations();
-});
-```
-
-**axe-core scope exclusion for 3D canvas:**
-
-```typescript
-// Exclude <canvas> from axe audit
-const results = await axe(container, {
-  exclude: [['canvas']],
-  runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] },
-});
-```
+| Scenario | Handling |
+|----------|----------|
+| `itemRefs.current[activeIndex]` is `null` | Guard with optional chaining (`?.focus()`); log warning in dev |
+| `brickTypes` array is empty | `useRovingTabIndex` returns `activeIndex=0`; no keyboard events fire |
+| `@axe-core/react` import fails (network/bundle issue) | Dynamic import wrapped in `.catch()`; failure is non-fatal, logged to console |
+| `jest-axe` reports violations in CI | Test fails with descriptive violation list; PR blocked until fixed |
+| Focus lost after brick selection | After `onSelectBrickType`, focus remains on the selected palette item (no focus reset) |
 
 ---
 
-## 7. Error Handling Strategy
+## 7. Security Considerations
 
-| Scenario | Handling Strategy |
-|----------|------------------|
-| `itemRefs.current[index]` is `null` (item unmounted during navigation) | Guard with optional chaining (`?.focus()`); log warning in DEV mode |
-| `itemCount` is 0 (empty palette) | `useRovingTabIndex` returns `activeIndex = -1`; no keyboard events processed |
-| axe-core dynamic import fails (network/CSP issue) | Catch promise rejection; log warning; do NOT block app startup |
-| `@axe-core/react` reports violations in DEV | Console warning only; does NOT throw; does NOT affect production |
-| Focus lost after category collapse | `returnFocusToCategory()` restores focus to the previously active category item |
-| Browser does not support `requestAnimationFrame` | Fallback to `setTimeout(fn, 0)` for focus scheduling |
+| Concern | Assessment | Mitigation |
+|---------|------------|------------|
+| XSS via `aria-label` | Low risk — labels are static strings, not user input | No mitigation needed |
+| `@axe-core/react` in production | Medium risk — adds bundle weight and console output | Conditional import: `NODE_ENV === 'development'` only |
+| `tabIndex` injection | Not applicable — tabIndex values are 0 or -1, never user-controlled | N/A |
+| Focus trapping | Not applicable — no modal dialogs in this feature | N/A |
 
 ---
 
-## 8. Security Considerations
+## 8. Acceptance Criteria Mapping
 
-| Concern | Mitigation |
-|---------|------------|
-| `axe-core` in production bundle | `@axe-core/react` is a dev-only dependency; `initAxeDev()` is guarded by `NODE_ENV !== 'development'`; dynamic import ensures zero production bundle impact |
-| XSS via `aria-label` | All `aria-label` values are static string constants defined in component props; no user-controlled content is injected into ARIA attributes |
-| Focus trap escape | No focus traps are introduced; the roving tabIndex pattern allows Tab to exit the palette naturally |
-| Keyboard event propagation | `e.preventDefault()` is called only for navigation keys (Arrow, Home, End, Enter, Space within listbox); does not suppress global shortcuts |
-
----
-
-## 9. Performance Considerations
-
-| Concern | Target | Strategy |
-|---------|--------|----------|
-| Re-renders on `activeIndex` change | < 1ms per keystroke | `useRovingTabIndex` uses `useState`; only the two affected items re-render (tabIndex change) |
-| `requestAnimationFrame` overhead | Negligible | Single rAF per keypress; cancelled if component unmounts |
-| axe-core bundle size | 0 KB in production | Dynamic import + DEV guard; tree-shaken from production build |
-| `itemRefs` array size | O(N) where N = brick types | Refs are lightweight; no performance concern for expected N < 200 |
+| Acceptance Criterion | Design Element | Test ID |
+|----------------------|---------------|----------|
+| Tab through all 7 toolbar buttons in logical order | Native `<button>` DOM order; `role="toolbar"` | T-A11Y-A11Y-001-01 |
+| Arrow keys move focus through brick types | `useRovingTabIndex` hook + `onKeyDown` handler | T-A11Y-A11Y-001-02 |
+| Enter on focused button triggers action | Native `<button>` Enter activation | T-A11Y-A11Y-001-03 |
+| Zero axe-core WCAG 2.1 AA violations on non-3D UI | `jest-axe` in component tests; `@axe-core/react` in dev | T-A11Y-A11Y-001-04 |
 
 ---
 
-## 10. Accessibility Compliance Summary
+## 9. NFR Targets
 
-### WCAG 2.1 AA Criteria Addressed
-
-| Criterion | Level | Description | Implementation |
-|-----------|-------|-------------|----------------|
-| 1.3.1 Info and Relationships | A | Structure conveyed via markup | `role="listbox"`, `role="option"`, `aria-label` on all interactive elements |
-| 2.1.1 Keyboard | A | All functionality via keyboard | Tab for toolbar; Arrow keys for palette; Enter/Space for activation |
-| 2.1.2 No Keyboard Trap | A | Focus not trapped | Roving tabIndex allows Tab to exit; Escape returns to category level |
-| 2.4.3 Focus Order | A | Logical focus sequence | DOM order for toolbar; roving tabIndex for palette |
-| 2.4.7 Focus Visible | AA | Focus indicator visible | `outline: 2px solid #005FCC; outline-offset: 2px` on all focusable elements |
-| 4.1.2 Name, Role, Value | A | UI components have accessible names | `aria-label` on all buttons; `aria-pressed` on toolbar buttons |
-
-### Exclusions
-
-- `<canvas>` (3D viewport): Excluded from all a11y audits per WCAG guidance on non-text content that cannot be made accessible. `aria-hidden="true"` applied.
+| NFR | Target | Measurement |
+|-----|--------|-------------|
+| WCAG 2.1 AA compliance | 0 violations on non-3D elements | axe-core audit (automated) |
+| Tab order correctness | 7 toolbar buttons in DOM order | Manual + automated test |
+| Focus visibility | ≥ 3:1 contrast ratio for focus ring | Colour contrast analyser |
+| Arrow key response time | < 16ms (one frame at 60fps) | React profiler |
+| Test coverage | 100% of keyboard interaction paths | jest-axe + RTL |
 
 ---
 
-## 11. Test Case Mapping
+## 10. Implementation Notes for Frontend Agent
 
-| Test ID | Description | Component Under Test | Verification Method |
-|---------|-------------|---------------------|---------------------|
-| T-A11Y-A11Y-001-01 | Tab through all 7 toolbar buttons in order | `Toolbar` | `userEvent.tab()` ×7; assert each button receives focus in sequence |
-| T-A11Y-A11Y-001-02 | Arrow key navigation through brick palette | `BrickPalette` | `userEvent.keyboard('{ArrowDown}')` ×N; assert `activeIndex` increments |
-| T-A11Y-A11Y-001-03 | Enter key triggers button action | `ToolbarButton`, `BrickItem` | `userEvent.keyboard('{Enter}')` on focused element; assert handler called |
-| T-A11Y-A11Y-001-04 | axe-core WCAG 2.1 AA audit — zero violations | `Toolbar`, `BrickPalette` | `jest-axe`: `expect(results).toHaveNoViolations()` |
-
----
-
-## 12. File Change Summary
-
-### New Files
-
-| File | Purpose |
-|------|---------| 
-| `src/hooks/useRovingTabIndex.ts` | Roving tabIndex custom hook |
-| `src/hooks/useKeyboardNav.ts` | Generic keyboard navigation handler factory |
-| `src/utils/axeDevSetup.ts` | axe-core dev-mode initialisation |
-
-### Modified Files
-
-| File | Change |
-|------|--------|
-| `src/components/Toolbar/Toolbar.tsx` | Ensure all 7 buttons are native `<button>`; add `aria-label`, `aria-pressed` |
-| `src/components/Toolbar/ToolbarButton.tsx` | Add `ariaLabel`, `isActive` props; render `aria-label`, `aria-pressed` |
-| `src/components/BrickPalette/BrickPalette.tsx` | Integrate `useRovingTabIndex`; add `onKeyDown` handlers |
-| `src/components/BrickPalette/BrickCategoryList.tsx` | Add `role="listbox"`, `aria-label` |
-| `src/components/BrickPalette/BrickCategoryItem.tsx` | Add `role="option"`, roving `tabIndex` |
-| `src/components/BrickPalette/BrickItemGrid.tsx` | Add `role="listbox"`, `aria-label` |
-| `src/components/BrickPalette/BrickItem.tsx` | Add `role="option"`, roving `tabIndex` |
-| `src/components/ViewportCanvas/ViewportCanvas.tsx` | Add `aria-hidden="true"`, `tabIndex={-1}` |
-| `src/main.tsx` | Call `initAxeDev()` in DEV mode |
-| `package.json` | Add `@axe-core/react` (devDependency), `jest-axe` (devDependency) |
+1. **Do not add `tabIndex` to toolbar buttons** — native `<button>` elements are already in the tab sequence.
+2. **Use `role="toolbar"` on the toolbar container** — this is an ARIA landmark that screen readers announce.
+3. **The `useRovingTabIndex` hook** should be implemented as a standalone hook in `src/hooks/` so it can be reused by other list-like components (e.g., colour picker).
+4. **`@axe-core/react` must not appear in the production bundle** — use a dynamic `import()` inside an `if (process.env.NODE_ENV === 'development')` guard.
+5. **`jest-axe` must be added to `devDependencies`** — it is a test-only dependency.
+6. **Focus ring CSS** must use `:focus-visible` (not `:focus`) to avoid showing outlines on mouse click.
+7. **3D canvas exclusion** — axe-core automatically skips `<canvas>` elements; no explicit exclusion rule is needed.
 
 ---
 
-## 13. Open Questions / Assumptions
+## 11. File Change Summary
 
-| # | Question / Assumption | Resolution |
-|---|----------------------|------------|
-| 1 | **Assumption:** Toolbar has exactly 7 buttons as specified in the issue. | Confirmed by issue AC: "all 7 toolbar buttons receive focus in logical order" |
-| 2 | **Assumption:** BrickPalette uses a two-level hierarchy (categories → items). | Consistent with FR-UI-002 (Issue #24) design. |
-| 3 | **Question:** Should the palette support 2D grid navigation (ArrowLeft/Right across columns) or only linear (ArrowUp/Down)? | **Decision:** Support both ArrowUp/Down (linear) and ArrowLeft/Right (grid) for `BrickItemGrid`; linear only for `BrickCategoryList`. |
-| 4 | **Assumption:** `@axe-core/react` dynamic import is acceptable (no strict CSP blocking dynamic imports). | If CSP is restrictive, use static import with `/* @vite-ignore */` comment. |
-| 5 | **Question:** Should keyboard shortcuts (S, P, D, R, C) be implemented as part of this NFR? | **Decision:** Keyboard shortcuts are out of scope for NFR-A11Y-001; they are documented in `aria-label` as hints only. |
-
----
-
-*Generated by Spectra Design Agent — NFR-A11Y-001 — LegoBuilder*
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `src/components/Toolbar/Toolbar.tsx` | Modify | Add `role="toolbar"`, `aria-label` on container and buttons |
+| `src/components/Toolbar/Toolbar.module.css` | Modify | Add `:focus-visible` outline styles |
+| `src/components/Toolbar/Toolbar.test.tsx` | Modify | Add `jest-axe` audit + keyboard interaction tests |
+| `src/components/BrickPalette/BrickPalette.tsx` | Modify | Add `role="listbox"`, roving tabIndex, `onKeyDown` handler |
+| `src/components/BrickPalette/BrickPalette.test.tsx` | Modify | Add `jest-axe` audit + arrow-key navigation tests |
+| `src/components/App/App.tsx` | Modify | Mount `@axe-core/react` in development mode |
+| `src/hooks/useRovingTabIndex.ts` | Create | Reusable roving tabIndex hook |
+| `src/utils/a11y.ts` | Create | Key constants and shared a11y helpers |
+| `package.json` | Modify | Add `jest-axe` to devDependencies; `@axe-core/react` to devDependencies |
