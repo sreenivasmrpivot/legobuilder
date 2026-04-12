@@ -1,0 +1,85 @@
+{
+  "handoff_id": "026_design_nfr_perf_003_complete",
+  "from_agent": "design-agent",
+  "to_agent": "gate-6a-design-review",
+  "timestamp": "2026-04-12T21:44:32Z",
+  "status": "complete",
+  "event": {
+    "event_id": "evt-design-nfr-perf-003",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "app-legobuilder-20260410",
+    "causation_id": "002_pm_complete"
+  },
+  "state_ref": {
+    "request_id": "17411fae-cdfe-4848-8149-d861859ed972",
+    "workflow_state_uri": "docs/handoffs/026_design_nfr_perf_003_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "path": "sreenivasmrpivot/legobuilder"
+  },
+  "artifacts": [
+    {
+      "name": "low-level-design",
+      "path": "docs/features/NFR-PERF-003/LOW_LEVEL_DESIGN.md",
+      "type": "design",
+      "description": "Low-Level Design for NFR-PERF-003: TTI <3s enforcement via Lighthouse CI, Vite code splitting, React.lazy, and bundle size budgets"
+    }
+  ],
+  "summary": {
+    "work_completed": "Created LOW_LEVEL_DESIGN.md for NFR-PERF-003 covering Vite manualChunks strategy, React.lazy Viewport deferral, Lighthouse CI configuration, bundle size budgets, error handling, and security considerations",
+    "key_findings": [
+      "Three.js (~600 KB gzipped) must be isolated in its own chunk and deferred behind React.lazy to keep critical path < 200 KB",
+      "Lighthouse CI with .lighthouserc.json asserts TTI < 3000 ms on 10 Mbps throttled desktop profile",
+      "Vite manualChunks splits three, r3f, bvh, zustand/immer, and idb into separate long-term-cached vendor chunks",
+      "Named Three.js imports (not import * as THREE) are required for tree-shaking to work",
+      "CSP compatibility verified: dynamic import() is native ESM and does not require unsafe-eval"
+    ],
+    "metrics": {
+      "files_to_create": 3,
+      "files_to_modify": 4,
+      "test_cases_covered": 1,
+      "nfrs_addressed": 1
+    }
+  },
+  "human_review_required": [
+    {
+      "item": "Lighthouse CI GitHub App token setup",
+      "reason": "LHCI_GITHUB_APP_TOKEN requires a GitHub App installation for PR status checks. Document setup steps before implementation.",
+      "severity": "medium"
+    },
+    {
+      "item": "Tailwind CSS unsafe-inline CSP conflict",
+      "reason": "If Tailwind generates any inline styles, this conflicts with NFR-SEC-002 CSP. Verify Tailwind JIT produces no inline styles.",
+      "severity": "medium"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Review docs/features/NFR-PERF-003/LOW_LEVEL_DESIGN.md for completeness and correctness",
+      "Verify Vite manualChunks strategy is consistent with existing vite.config.ts scaffold",
+      "Confirm .lighthouserc.json TTI threshold of 3000 ms is achievable given Three.js bundle size",
+      "Check CSP compatibility between NFR-PERF-003 (dynamic import) and NFR-SEC-002 (CSP headers)",
+      "Approve or request changes via PR #28 design review"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-PERF-003/LOW_LEVEL_DESIGN.md",
+      "docs/features/NFR-SEC-002/LOW_LEVEL_DESIGN.md",
+      "docs/features/FR-PERF-001/LOW_LEVEL_DESIGN.md"
+    ]
+  },
+  "workflow_state": {
+    "workflow_type": "pure_greenfield",
+    "current_phase": "design",
+    "completed_phases": ["research", "pm", "architecture", "design"],
+    "remaining_phases": ["gate-6a-design-review", "frontend-test", "frontend-coding", "frontend-review", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-NFR-PERF-003"],
+    "forward_pass_score": 0.97,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
