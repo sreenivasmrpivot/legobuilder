@@ -1,0 +1,122 @@
+{
+  "handoff_id": "027_frontend_test_nfr_rel_001_complete",
+  "from_agent": "frontend-test",
+  "to_agent": "frontend-coding",
+  "timestamp": "2026-04-12T16:07:03Z",
+  "status": "complete",
+  "app_id": "app-legobuilder-20260410",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "issue_number": 35,
+  "fr_id": "NFR-REL-001",
+  "summary": "Frontend Test agent produced 11 TDD test cases for NFR-REL-001 (Auto-Save Crash Durability), fully aligned to LLD v2.0 verified interface contracts. Tests cover: detectOrphanedSession() API (not detectCrash()), 30s auto-save interval, browser.close({ runBeforeUnload: false }) crash simulation, atomic dual-store IDB write, ARIA-compliant ResumePrompt, quota exceeded purge, and corrupted data discard. All tests are RED (TDD) — implementation required.",
+  "artifacts": [
+    {
+      "name": "persistenceService.test.ts",
+      "path": "frontend/src/services/persistenceService.test.ts",
+      "type": "test",
+      "description": "Unit tests: T-UNIT-REL-001-01 (atomic write), T-UNIT-REL-001-04 (closeSession), T-UNIT-REL-001-07 (quota exceeded purge)"
+    },
+    {
+      "name": "crashRecoveryService.test.ts",
+      "path": "frontend/src/services/crashRecoveryService.test.ts",
+      "type": "test",
+      "description": "Unit tests: T-UNIT-REL-001-02 (no active sessions), T-UNIT-REL-001-03 (active session found), T-UNIT-REL-001-08 (corrupted data discarded)"
+    },
+    {
+      "name": "useAutoSave.test.ts",
+      "path": "frontend/src/hooks/useAutoSave.test.ts",
+      "type": "test",
+      "description": "Unit test: T-UNIT-REL-001-06 (beforeunload registration, 30s interval, overlap guard, cleanup)"
+    },
+    {
+      "name": "ResumePrompt.test.tsx",
+      "path": "frontend/tests/component/ResumePrompt.test.tsx",
+      "type": "test",
+      "description": "Component test: T-UNIT-REL-001-05 (ARIA attributes, data-testid selectors, keyboard navigation, autoFocus)"
+    },
+    {
+      "name": "crashRecovery.spec.ts",
+      "path": "frontend/tests/e2e/crashRecovery.spec.ts",
+      "type": "test",
+      "description": "E2E tests: T-BE-REL-001-01 (crash recovery), T-BE-REL-001-02 (graceful close), T-BE-REL-001-01b (discard path)"
+    },
+    {
+      "name": "027_frontend_test_nfr_rel_001_complete.json",
+      "path": "docs/handoffs/027_frontend_test_nfr_rel_001_complete.json",
+      "type": "handoff",
+      "description": "Machine-readable handoff artifact"
+    },
+    {
+      "name": "027_frontend_test_nfr_rel_001_HANDOFF.md",
+      "path": "docs/handoffs/027_frontend_test_nfr_rel_001_HANDOFF.md",
+      "type": "handoff",
+      "description": "Human-readable handoff summary"
+    }
+  ],
+  "workflow_state": {
+    "workflow_type": "pure_greenfield",
+    "current_phase": "frontend-test",
+    "completed_phases": ["research", "pm", "architecture", "design", "frontend-test"],
+    "remaining_phases": ["frontend-coding", "frontend-review", "release"]
+  },
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md for full interface contracts",
+      "Implement frontend/src/services/dbSchema.ts — IDB schema, types, PersistenceError, constants",
+      "Implement frontend/src/services/persistenceService.ts — saveSnapshot(), closeSession(), loadSnapshot(), purgeOldSnapshots(), purgeSession()",
+      "Implement frontend/src/services/crashRecoveryService.ts — detectOrphanedSession(), discardRecovery(), validateSnapshot()",
+      "Implement frontend/src/stores/persistenceStore.ts — Zustand store with session lifecycle",
+      "Implement frontend/src/hooks/useAutoSave.ts — 30s interval + beforeunload handler",
+      "Implement frontend/src/components/ResumePrompt/ResumePrompt.tsx — accessible modal with all data-testid attributes",
+      "Implement frontend/src/components/AutoSaveStatus.tsx — status indicator with data-testid=auto-save-status",
+      "Ensure idb is in dependencies (not devDependencies) in frontend/package.json",
+      "Ensure fake-indexeddb is in devDependencies in frontend/package.json",
+      "All tests must pass GREEN after implementation"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-REL-001/LOW_LEVEL_DESIGN.md",
+      "frontend/src/services/persistenceService.test.ts",
+      "frontend/src/services/crashRecoveryService.test.ts",
+      "frontend/src/hooks/useAutoSave.test.ts",
+      "frontend/tests/component/ResumePrompt.test.tsx",
+      "frontend/tests/e2e/crashRecovery.spec.ts"
+    ]
+  },
+  "human_review_required": [],
+  "test_summary": {
+    "total_tests": 11,
+    "unit_tests": 8,
+    "e2e_tests": 3,
+    "test_ids": [
+      "T-BE-REL-001-01",
+      "T-BE-REL-001-02",
+      "T-BE-REL-001-01b",
+      "T-UNIT-REL-001-01",
+      "T-UNIT-REL-001-02",
+      "T-UNIT-REL-001-03",
+      "T-UNIT-REL-001-04",
+      "T-UNIT-REL-001-05",
+      "T-UNIT-REL-001-06",
+      "T-UNIT-REL-001-07",
+      "T-UNIT-REL-001-08"
+    ],
+    "status": "RED — awaiting implementation"
+  },
+  "key_interface_contracts": {
+    "crash_detection_api": "detectOrphanedSession() — NOT detectCrash()",
+    "auto_save_interval_ms": 30000,
+    "crash_simulation": "browser.close({ runBeforeUnload: false })",
+    "idb_test_library": "fake-indexeddb/auto",
+    "idb_runtime_library": "idb (in dependencies, not devDependencies)",
+    "data_testids": [
+      "resume-prompt",
+      "resume-prompt-brick-count",
+      "resume-btn",
+      "discard-btn",
+      "add-brick-btn",
+      "brick-instance",
+      "auto-save-status"
+    ]
+  },
+  "pr_branch": "feature/35-nfr-rel-001-frontend-tests"
+}

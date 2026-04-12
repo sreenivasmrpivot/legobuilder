@@ -1,151 +1,227 @@
 /**
+ * crashRecovery.spec.ts
  * NFR-REL-001 — Auto-Save Crash Durability
- * Playwright E2E tests
  *
  * Test IDs:
- *   T-BE-REL-001-01: 50 bricks survive browser crash, resume prompt shown
- *   T-BE-REL-001-02: Graceful close: resume prompt shown on reopen
+ *   T-BE-REL-001-01: Browser crash — 50 bricks survive, resume prompt shown
+ *   T-BE-REL-001-02: Graceful close — no resume prompt on reopen
+ *   T-BE-REL-001-01b: Discard path — prompt dismissed, scene empty
  *
- * Crash simulation: browser.close({ runBeforeUnload: false })
- * This skips the beforeunload handler, leaving the session status='active'
- * in IndexedDB — the correct crash simulation per LLD Section 6.4.
- *
- * Spectra-Agent: frontend-test
- * Spectra-FRs: NFR-REL-001
- * Spectra-Iteration: 3
+ * LLD v2.0 verified facts:
+ *   - browser.close({ runBeforeUnload: false }) is the ONLY correct crash simulation
+ *   - page.close() and context.close() both fire beforeunload — DO NOT USE
+ *   - AUTO_SAVE_INTERVAL_MS = 30_000 (30 seconds)
+ *   - data-testid selectors: resume-prompt, resume-prompt-brick-count,
+ *     resume-btn, discard-btn, add-brick-btn, brick-instance, auto-save-status
  */
-import { test, expect, chromium, type BrowserContext } from '@playwright/test';
+import { test, expect, chromium, type Browser, type Page } from '@playwright/test';
 
+// ---------------------------------------------------------------------------
+// Constants (LLD v2.0 verified)
+// ---------------------------------------------------------------------------
+
+const AUTO_SAVE_INTERVAL_MS = 30_000;
 const APP_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
-const BRICK_COUNT = 50;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 /**
- * Helper: add N bricks to the scene via the palette UI
+ * Adds `count` bricks to the scene via the UI.
+ * Uses data-testid="add-brick-btn" as confirmed in LLD v2.0.
  */
-async function addBricks(context: BrowserContext, count: number): Promise<void> {
-  const page = await context.newPage();
-  await page.goto(APP_URL);
-  await page.waitForSelector('[data-testid="add-brick-btn"]', { timeout: 10_000 });
-
+async function addBricks(page: Page, count: number): Promise<void> {
   for (let i = 0; i < count; i++) {
-    await page.click('[data-testid="add-brick-btn"]');
+    await page.getByTestId('add-brick-btn').click();
+    // Small delay to avoid overwhelming the UI
+    if (i % 10 === 9) {
+      await page.waitForTimeout(100);
+    }
   }
-
-  // Wait for auto-save to complete (status indicator shows 'saved')
-  await page.waitForSelector('[data-testid="auto-save-status"][data-status="saved"]', {
-    timeout: 15_000,
-  });
-
-  return page.close();
 }
 
 /**
- * T-BE-REL-001-01: 50 bricks survive browser crash
- *
- * Given a scene with 50 bricks and auto-save completed,
- * when the browser process is killed (runBeforeUnload: false),
- * then reopening the app shows all 50 bricks via the resume prompt.
+ * Waits for the auto-save indicator to show 'Saved'.
+ * Uses data-testid="auto-save-status" as confirmed in LLD v2.0.
  */
-test('T-BE-REL-001-01: 50 bricks survive browser crash — resume prompt shown', async () => {
-  // Launch a dedicated browser instance for crash simulation
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
-
-  // Step 1: Add 50 bricks and wait for auto-save
-  await addBricks(context, BRICK_COUNT);
-
-  // Step 2: Simulate crash — close browser WITHOUT running beforeunload
-  // This leaves the IndexedDB session status='active' (orphaned session)
-  await browser.close({ runBeforeUnload: false } as Parameters<typeof browser.close>[0]);
-
-  // Step 3: Reopen the app in a new browser instance (same IDB origin)
-  const browser2 = await chromium.launch();
-  const context2 = await browser2.newContext();
-  const page2 = await context2.newPage();
-
-  await page2.goto(APP_URL);
-
-  // Step 4: Resume prompt should appear
-  await expect(page2.getByTestId('resume-prompt')).toBeVisible({ timeout: 10_000 });
-
-  // Step 5: Brick count should show 50
-  const brickCountEl = page2.getByTestId('resume-prompt-brick-count');
-  await expect(brickCountEl).toBeVisible();
-  const brickCountText = await brickCountEl.textContent();
-  expect(brickCountText).toContain(String(BRICK_COUNT));
-
-  // Step 6: Click Resume and verify bricks are restored
-  await page2.getByTestId('resume-btn').click();
-  await expect(page2.getByTestId('resume-prompt')).not.toBeVisible({ timeout: 5_000 });
-
-  const brickInstances = page2.locator('[data-testid="brick-instance"]');
-  await expect(brickInstances).toHaveCount(BRICK_COUNT, { timeout: 10_000 });
-
-  await browser2.close();
-});
+async function waitForAutoSave(page: Page): Promise<void> {
+  await page.getByTestId('auto-save-status').waitFor({ state: 'visible' });
+  await expect(page.getByTestId('auto-save-status')).toContainText('Saved', {
+    timeout: AUTO_SAVE_INTERVAL_MS + 10_000, // interval + 10s buffer
+  });
+}
 
 /**
- * T-BE-REL-001-02: Graceful close — resume prompt on reopen
- *
- * Given a scene with bricks and auto-save completed,
- * when the browser tab is closed normally (beforeunload fires),
- * then reopening the app does NOT show the resume prompt
- * (session was marked closed).
+ * Counts the number of brick instances in the scene.
+ * Uses data-testid="brick-instance" as confirmed in LLD v2.0.
  */
-test('T-BE-REL-001-02: Graceful close — no resume prompt on reopen', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+async function getBrickCount(page: Page): Promise<number> {
+  const bricks = page.getByTestId('brick-instance');
+  return bricks.count();
+}
 
-  // Step 1: Add bricks and wait for auto-save
-  await addBricks(context, 10);
+// ---------------------------------------------------------------------------
+// T-BE-REL-001-01: Browser crash — 50 bricks survive, resume prompt shown
+// ---------------------------------------------------------------------------
 
-  // Step 2: Close gracefully — beforeunload fires, session marked 'closed'
-  await browser.close(); // Default: runBeforeUnload: true
+test.describe('T-BE-REL-001-01: Browser crash recovery', () => {
+  test('50 bricks survive browser crash — resume prompt shown with correct count', async () => {
+    // Phase 1: Launch browser, add 50 bricks, wait for auto-save
+    const browser1: Browser = await chromium.launch();
+    const context1 = await browser1.newContext();
+    const page1 = await context1.newPage();
 
-  // Step 3: Reopen the app
-  const browser2 = await chromium.launch();
-  const context2 = await browser2.newContext();
-  const page2 = await context2.newPage();
+    await page1.goto(APP_URL);
+    await page1.waitForLoadState('networkidle');
 
-  await page2.goto(APP_URL);
-  await page2.waitForLoadState('networkidle');
+    // Add 50 bricks
+    await addBricks(page1, 50);
 
-  // Step 4: Resume prompt should NOT appear (graceful close)
-  await expect(page2.getByTestId('resume-prompt')).not.toBeVisible({ timeout: 5_000 });
+    // Wait for auto-save to complete
+    await waitForAutoSave(page1);
 
-  await browser2.close();
+    // Verify IDB has the snapshot before crash
+    const snapshotExists = await page1.evaluate(async () => {
+      return new Promise<boolean>((resolve) => {
+        const req = indexedDB.open('legobuilder-v1');
+        req.onsuccess = (e) => {
+          const db = (e.target as IDBOpenDBRequest).result;
+          const tx = db.transaction('auto-save-meta', 'readonly');
+          const store = tx.objectStore('auto-save-meta');
+          const getAllReq = store.getAll();
+          getAllReq.onsuccess = () => {
+            const records = getAllReq.result as Array<{ status: string }>;
+            resolve(records.some((r) => r.status === 'active'));
+          };
+        };
+        req.onerror = () => resolve(false);
+      });
+    });
+    expect(snapshotExists).toBe(true);
+
+    // Phase 2: CRASH — browser.close({ runBeforeUnload: false })
+    // This is the ONLY correct way to simulate a crash in Playwright.
+    // It skips beforeunload, leaving session status='active' in IDB.
+    await browser1.close({ runBeforeUnload: false });
+
+    // Phase 3: Relaunch browser — fresh process, same IDB data
+    const browser2: Browser = await chromium.launch();
+    const context2 = await browser2.newContext();
+    const page2 = await context2.newPage();
+
+    await page2.goto(APP_URL);
+    await page2.waitForLoadState('networkidle');
+
+    // Assert: Resume prompt is visible
+    await expect(page2.getByTestId('resume-prompt')).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // Assert: Brick count in prompt matches 50
+    const brickCountText = await page2.getByTestId('resume-prompt-brick-count').textContent();
+    expect(brickCountText).toContain('50');
+
+    // Phase 4: Click Resume — verify 50 bricks are restored
+    await page2.getByTestId('resume-btn').click();
+
+    // Wait for scene to render
+    await page2.waitForTimeout(1000);
+
+    const restoredBrickCount = await getBrickCount(page2);
+    expect(restoredBrickCount).toBe(50);
+
+    await browser2.close();
+  });
 });
 
-/**
- * T-BE-REL-001-01b: Discard path — resume prompt dismissed
- *
- * Given the resume prompt is shown after a crash,
- * when the user clicks Discard,
- * then the prompt is dismissed and the scene is empty.
- */
-test('T-BE-REL-001-01b: Discard path — resume prompt dismissed, scene empty', async () => {
-  const browser = await chromium.launch();
-  const context = await browser.newContext();
+// ---------------------------------------------------------------------------
+// T-BE-REL-001-02: Graceful close — no resume prompt on reopen
+// ---------------------------------------------------------------------------
 
-  // Step 1: Add bricks and crash
-  await addBricks(context, 5);
-  await browser.close({ runBeforeUnload: false } as Parameters<typeof browser.close>[0]);
+test.describe('T-BE-REL-001-02: Graceful close — no false-positive recovery', () => {
+  test('graceful tab close does not trigger resume prompt on reopen', async () => {
+    // Phase 1: Launch browser, add bricks, wait for auto-save
+    const browser1: Browser = await chromium.launch();
+    const context1 = await browser1.newContext();
+    const page1 = await context1.newPage();
 
-  // Step 2: Reopen and verify resume prompt
-  const browser2 = await chromium.launch();
-  const context2 = await browser2.newContext();
-  const page2 = await context2.newPage();
+    await page1.goto(APP_URL);
+    await page1.waitForLoadState('networkidle');
 
-  await page2.goto(APP_URL);
-  await expect(page2.getByTestId('resume-prompt')).toBeVisible({ timeout: 10_000 });
+    // Add some bricks
+    await addBricks(page1, 10);
 
-  // Step 3: Click Discard
-  await page2.getByTestId('discard-btn').click();
+    // Wait for auto-save
+    await waitForAutoSave(page1);
 
-  // Step 4: Prompt dismissed, scene is empty
-  await expect(page2.getByTestId('resume-prompt')).not.toBeVisible({ timeout: 5_000 });
-  const brickInstances = page2.locator('[data-testid="brick-instance"]');
-  await expect(brickInstances).toHaveCount(0, { timeout: 5_000 });
+    // Phase 2: GRACEFUL close — fires beforeunload, marks session as 'closed'
+    // This is a normal tab close (NOT a crash).
+    // context.close() fires beforeunload — correct for graceful close test.
+    await context1.close();
+    await browser1.close();
 
-  await browser2.close();
+    // Phase 3: Relaunch browser
+    const browser2: Browser = await chromium.launch();
+    const context2 = await browser2.newContext();
+    const page2 = await context2.newPage();
+
+    await page2.goto(APP_URL);
+    await page2.waitForLoadState('networkidle');
+
+    // Assert: Resume prompt is NOT visible (session was gracefully closed)
+    await page2.waitForTimeout(2000); // Give app time to check IDB
+    const resumePromptVisible = await page2.getByTestId('resume-prompt').isVisible();
+    expect(resumePromptVisible).toBe(false);
+
+    await browser2.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-BE-REL-001-01b: Discard path — prompt dismissed, scene empty
+// ---------------------------------------------------------------------------
+
+test.describe('T-BE-REL-001-01b: Discard path — resume prompt dismissed', () => {
+  test('clicking Discard dismisses prompt and starts with empty scene', async () => {
+    // Phase 1: Create a crash scenario
+    const browser1: Browser = await chromium.launch();
+    const context1 = await browser1.newContext();
+    const page1 = await context1.newPage();
+
+    await page1.goto(APP_URL);
+    await page1.waitForLoadState('networkidle');
+
+    await addBricks(page1, 20);
+    await waitForAutoSave(page1);
+
+    // Crash the browser
+    await browser1.close({ runBeforeUnload: false });
+
+    // Phase 2: Relaunch and discard recovery
+    const browser2: Browser = await chromium.launch();
+    const context2 = await browser2.newContext();
+    const page2 = await context2.newPage();
+
+    await page2.goto(APP_URL);
+    await page2.waitForLoadState('networkidle');
+
+    // Assert: Resume prompt is visible
+    await expect(page2.getByTestId('resume-prompt')).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // Click Discard
+    await page2.getByTestId('discard-btn').click();
+
+    // Assert: Resume prompt is dismissed
+    await expect(page2.getByTestId('resume-prompt')).not.toBeVisible();
+
+    // Assert: Scene is empty (no bricks from the crashed session)
+    await page2.waitForTimeout(500);
+    const brickCount = await getBrickCount(page2);
+    expect(brickCount).toBe(0);
+
+    await browser2.close();
+  });
 });
