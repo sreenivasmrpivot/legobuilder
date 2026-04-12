@@ -1,16 +1,13 @@
-export function Toolbar() {
+/** Toolbar stub - FR-UI-001, FR-EDIT-001, FR-EDIT-002 */
+export function ToolbarStub() {
   return (
-    <header className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-200 shadow-sm">
-      <h1 className="text-lg font-bold text-gray-800 mr-4">LegoBuilder</h1>
-      <div className="flex gap-1">
-        <button className="px-3 py-1 text-sm rounded hover:bg-gray-100 disabled:opacity-50" data-testid="undo-btn">Undo</button>
-        <button className="px-3 py-1 text-sm rounded hover:bg-gray-100 disabled:opacity-50" data-testid="redo-btn">Redo</button>
-      </div>
-      <div className="flex-1" />
-      <div className="flex gap-1">
-        <button className="px-3 py-1 text-sm rounded hover:bg-gray-100" data-testid="save-btn">Save</button>
-        <button className="px-3 py-1 text-sm rounded hover:bg-gray-100" data-testid="export-btn">Export</button>
-      </div>
-    </header>
+    <div className="flex items-center gap-2" data-testid="toolbar">
+      <button className="rounded bg-gray-700 px-3 py-1 text-sm hover:bg-gray-600" disabled>Undo</button>
+      <button className="rounded bg-gray-700 px-3 py-1 text-sm hover:bg-gray-600" disabled>Redo</button>
+      <div className="mx-2 h-6 w-px bg-gray-600" />
+      <button className="rounded bg-gray-700 px-3 py-1 text-sm hover:bg-gray-600" disabled>New</button>
+      <button className="rounded bg-gray-700 px-3 py-1 text-sm hover:bg-gray-600" disabled>Save</button>
+      <button className="rounded bg-gray-700 px-3 py-1 text-sm hover:bg-gray-600" disabled>Export</button>
+    </div>
   );
 }

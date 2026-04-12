@@ -1,32 +1,21 @@
-import { BRICK_CATALOG, COLOR_PALETTE } from '@/engine/brickCatalog';
+import { BRICK_CATALOG, COLOR_PALETTE } from '../../engine/brickCatalog';
 
-export function BrickPalette() {
+/** BrickPalette stub - FR-BRICK-001, FR-BRICK-002 */
+export function BrickPaletteStub() {
   return (
-    <aside className="w-60 bg-white border-r border-gray-200 p-4 overflow-y-auto">
-      <h2 className="text-sm font-semibold text-gray-600 uppercase mb-3">Bricks</h2>
-      <div className="grid grid-cols-2 gap-2 mb-6">
+    <div className="border-b border-gray-700 p-4" data-testid="brick-palette">
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-gray-400">Bricks</h2>
+      <div className="grid grid-cols-3 gap-2">
         {Object.values(BRICK_CATALOG).map((brick) => (
-          <button
-            key={brick.type}
-            className="p-2 text-xs text-center rounded border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-colors"
-            data-testid={`brick-${brick.type}`}
-          >
-            {brick.name}
-          </button>
+          <button key={brick.type} className="rounded bg-gray-700 p-2 text-xs hover:bg-gray-600" data-testid={`brick-${brick.type}`}>{brick.label}</button>
         ))}
       </div>
-      <h2 className="text-sm font-semibold text-gray-600 uppercase mb-3">Colors</h2>
-      <div className="grid grid-cols-5 gap-2">
+      <h2 className="mb-3 mt-4 text-sm font-semibold uppercase tracking-wider text-gray-400">Colors</h2>
+      <div className="flex flex-wrap gap-2">
         {COLOR_PALETTE.map((color) => (
-          <button
-            key={color}
-            className="w-8 h-8 rounded-full border-2 border-gray-300 hover:border-blue-400 transition-colors"
-            style={{ backgroundColor: color }}
-            data-testid={`color-${color}`}
-            aria-label={`Select color ${color}`}
-          />
+          <button key={color} className="h-6 w-6 rounded border border-gray-600" style={{ backgroundColor: color }} aria-label={`color ${color}`} data-testid={`color-${color}`} />
         ))}
       </div>
-    </aside>
+    </div>
   );
 }
