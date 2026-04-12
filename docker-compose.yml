@@ -4,13 +4,19 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
     ports:
-      - "5173:5173"
+      - "3000:80"
+    restart: unless-stopped
+
+  frontend-dev:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "3000:3000"
     volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
-      - ./frontend/tests:/app/tests
-      - ./frontend/index.html:/app/index.html
-    environment:
-      - NODE_ENV=development
+      - ./frontend:/app
+      - /app/node_modules
+    profiles:
+      - dev

@@ -1,53 +1,47 @@
-.PHONY: dev build test lint format type-check clean install
+.PHONY: help dev install test lint typecheck build docker-build docker-run clean
 
-# --- Development ---
+help:
+	@echo "LegoBuilder Commands:"
+	@echo "  make install       - Install dependencies"
+	@echo "  make dev           - Start dev server"
+	@echo "  make test          - Run tests"
+	@echo "  make lint          - Run linter"
+	@echo "  make typecheck     - Type check"
+	@echo "  make build         - Production build"
+	@echo "  make docker-build  - Build Docker image"
+	@echo "  make docker-run    - Run Docker container"
+	@echo "  make k8s-deploy    - Deploy to KIND"
+
 dev:
 	cd frontend && npm run dev
 
-dev-docker:
-	docker compose up --build
-
-# --- Build ---
-build:
-	cd frontend && npm run build
-
-build-docker:
-	docker build -t legobuilder ./frontend
-
-# --- Testing ---
-test:
-	cd frontend && npm run test
-
-test-watch:
-	cd frontend && npm run test:watch
-
-test-coverage:
-	cd frontend && npm run test:coverage
-
-test-e2e:
-	cd frontend && npm run test:e2e
-
-# --- Code Quality ---
-lint:
-	cd frontend && npm run lint
-
-lint-fix:
-	cd frontend && npm run lint:fix
-
-format:
-	cd frontend && npm run format
-
-format-check:
-	cd frontend && npm run format:check
-
-type-check:
-	cd frontend && npm run type-check
-
-# --- Setup ---
 install:
 	cd frontend && npm install
 
-# --- Cleanup ---
+test:
+	cd frontend && npm test
+
+lint:
+	cd frontend && npm run lint
+
+typecheck:
+	cd frontend && npm run typecheck
+
+build:
+	cd frontend && npm run build
+
+docker-build:
+	docker build -t legobuilder:latest ./frontend
+
+docker-run:
+	docker run -p 3000:80 legobuilder:latest
+
+docker-compose-up:
+	docker compose up --build
+
+k8s-deploy: docker-build
+	kind load docker-image legobuilder:latest
+	kubectl apply -f k8s/deployment.yaml
+
 clean:
-	cd frontend && rm -rf dist node_modules .vitest
-	docker compose down --rmi local 2>/dev/null || true
+	rm -rf frontend/dist frontend/node_modules
