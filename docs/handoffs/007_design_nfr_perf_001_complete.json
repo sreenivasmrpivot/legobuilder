@@ -1,0 +1,95 @@
+{
+  "handoff_id": "007_design_nfr_perf_001_complete",
+  "from_agent": "design-agent",
+  "to_agent": "gate-6a-design-review",
+  "timestamp": "2026-04-12T16:05:10Z",
+  "status": "complete",
+  "app_id": "app-legobuilder-20260410",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "issue_number": 29,
+  "fr_id": "NFR-PERF-001",
+  "area": "frontend",
+  "event": {
+    "event_id": "evt-design-nfr-perf-001",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "app-legobuilder-20260410",
+    "causation_id": "task-11bc16b8-182e-48d9-bc81-db9b3fda647e"
+  },
+  "state_ref": {
+    "request_id": "11bc16b8-182e-48d9-bc81-db9b3fda647e",
+    "workflow_state_uri": "docs/handoffs/007_design_nfr_perf_001_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "path": "sreenivasmrpivot/legobuilder"
+  },
+  "pr_number": 51,
+  "branch": "feature/29-nfr-perf-001-design",
+  "artifacts": [
+    {
+      "name": "LOW_LEVEL_DESIGN",
+      "path": "docs/features/NFR-PERF-001/LOW_LEVEL_DESIGN.md",
+      "type": "design",
+      "description": "Full LLD for NFR-PERF-001: Puppeteer-based automated performance test harness enforcing ≥60 FPS (p95 frame time <16.7ms) with 500 bricks. Covers performanceMonitor utility, p95 algorithm, CI integration, SwiftShader WebGL config, and test case mapping."
+    }
+  ],
+  "summary": {
+    "work_completed": "Low-Level Design for NFR-PERF-001 authored and merged via PR #51. LLD specifies a Puppeteer-based automated performance test harness that enforces ≥60 FPS (p95 frame time <16.7ms) with 500 bricks on mid-range hardware. Design covers performanceMonitor.ts utility, three brick-count scenarios (100/250/500), p95 calculation with 60-frame warmup discard, SwiftShader WebGL for CI, and build-failing CI integration.",
+    "key_findings": [
+      "LLD already merged to main via PR #51 (merged 2026-04-11T06:56:16Z) — idempotent re-trigger",
+      "performanceMonitor.ts attaches to window only in NODE_ENV !== 'production' (zero production bundle impact)",
+      "SwiftShader WebGL (--use-gl=swiftshader) enables Three.js rendering in headless CI without GPU",
+      "60-frame warmup discard eliminates Three.js scene initialization overhead from p95 measurement",
+      "Separate jest.performance.config.ts with 30s timeout isolates perf tests from unit/integration suite"
+    ],
+    "metrics": {
+      "lld_sections": 12,
+      "test_cases_mapped": 3,
+      "brick_count_scenarios": 3,
+      "p95_threshold_ms": 16.7,
+      "warmup_frames": 60,
+      "measurement_window_seconds": 10
+    }
+  },
+  "human_review_required": [
+    {
+      "item": "30 FPS floor as warning vs. hard assertion",
+      "reason": "Issue specifies minimum frame time never below 33.3ms (30 FPS floor) — unclear if this should be a hard CI failure or advisory warning",
+      "severity": "medium"
+    },
+    {
+      "item": "SwiftShader 16.7ms threshold calibration for CI",
+      "reason": "CI runners use software rendering; threshold may need adjustment if SwiftShader cannot sustain 60 FPS",
+      "severity": "medium"
+    }
+  ],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read docs/features/NFR-PERF-001/LOW_LEVEL_DESIGN.md for full test harness specification",
+      "Write TDD test suite for T-PERF-PERF-001-01 (500 bricks p95 <16.7ms), T-PERF-PERF-001-02 (100/250/500 brick scenarios all pass), T-PERF-PERF-001-03 (CI build fails on threshold breach)",
+      "Create frontend/tests/performance/frameRate.test.ts using Puppeteer + requestAnimationFrame timestamps",
+      "Configure jest.performance.config.ts with 30s timeout, isolated from unit test suite",
+      "Implement performanceMonitor utility stub (dev/test-only, window.__perfMonitor) for test harness",
+      "Ensure SwiftShader WebGL flags are set in Puppeteer launch config for CI compatibility"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-PERF-001/LOW_LEVEL_DESIGN.md",
+      "docs/TECHNICAL_ARCHITECTURE.md",
+      "docs/TEST_PLAN.md"
+    ]
+  },
+  "workflow_state": {
+    "workflow_type": "pure_greenfield",
+    "current_phase": "design",
+    "completed_phases": ["research", "pm", "architecture", "planning", "design"],
+    "remaining_phases": ["gate-6a-design-review", "frontend-test", "frontend-coding", "frontend-review", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-NFR-PERF-001"],
+    "forward_pass_score": 0.97,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
