@@ -1,0 +1,87 @@
+{
+  "handoff_id": "011_design_nfr_rel_002_complete",
+  "from_agent": "design-agent",
+  "to_agent": "frontend-test",
+  "timestamp": "2026-04-12T16:02:02Z",
+  "status": "complete",
+  "app_id": "app-legobuilder-20260410",
+  "target_repo": "sreenivasmrpivot/legobuilder",
+  "event": {
+    "event_id": "evt-design-nfr-rel-002",
+    "event_type": "agent.handoff.completed",
+    "correlation_id": "wf-app-legobuilder-20260410",
+    "causation_id": "task-5d0b0c58-482a-4a91-b4e6-b38c4dda3d40"
+  },
+  "state_ref": {
+    "request_id": "5d0b0c58-482a-4a91-b4e6-b38c4dda3d40",
+    "workflow_state_uri": "docs/handoffs/011_design_nfr_rel_002_complete.json"
+  },
+  "project": {
+    "name": "legobuilder",
+    "type": "greenfield",
+    "path": "sreenivasmrpivot/legobuilder"
+  },
+  "feature": {
+    "fr_id": "NFR-REL-002",
+    "issue_number": 36,
+    "issue_title": "[NFR-REL-002] Implement graceful recovery from WebGL context loss",
+    "area": "frontend"
+  },
+  "artifacts": [
+    {
+      "name": "LOW_LEVEL_DESIGN",
+      "path": "docs/features/NFR-REL-002/LOW_LEVEL_DESIGN.md",
+      "type": "design",
+      "description": "Full LLD for NFR-REL-002: WebGLContextGuard component, contextRecoveryStore Zustand slice, ContextLossOverlay UI, browser event contracts, 3 Mermaid sequence diagrams, exponential backoff retry, error handling, security, accessibility, and integration test design (T-BE-REL-002-01)",
+      "status": "merged",
+      "pr_number": 47
+    }
+  ],
+  "summary": {
+    "work_completed": "Low-Level Design for NFR-REL-002 (WebGL context loss graceful recovery) authored, reviewed, and merged to main via PR #47. LLD is the authoritative design document for the frontend-test and frontend-coding agents.",
+    "key_findings": [
+      "WebGLContextGuard is a pure behavior R3F component that attaches webglcontextlost/webglcontextrestored DOM event listeners via useThree()",
+      "contextRecoveryStore (new Zustand slice) tracks status: normal|lost|restoring|restored and drives ContextLossOverlay visibility",
+      "Scene reconstruction reads from sceneStore (Zustand) — GPU state loss does not destroy application state",
+      "Exponential backoff retry: 3 attempts at 0ms/500ms/1000ms before hard-failure Reload Page UI",
+      "event.preventDefault() is mandatory in handleContextLost to signal browser intent to restore context"
+    ],
+    "metrics": {
+      "lld_sections": 14,
+      "sequence_diagrams": 3,
+      "test_cases_designed": 3,
+      "new_dependencies": 0,
+      "pr_number": 47,
+      "pr_status": "merged"
+    }
+  },
+  "human_review_required": [],
+  "next_agent_context": {
+    "recommended_actions": [
+      "Read docs/features/NFR-REL-002/LOW_LEVEL_DESIGN.md — this is the authoritative design for all test authoring",
+      "Write integration test: frontend/tests/integration/webglContextLoss.test.ts using WEBGL_lose_context extension to simulate context loss (TC-01: no crash, TC-02: bricks restored, TC-03: loading indicator shown)",
+      "Write unit tests for WebGLContextGuard: verify handleContextLost calls event.preventDefault(), pauses render loop, sets contextRecoveryStore status to 'lost'",
+      "Write unit tests for contextRecoveryStore: verify state transitions normal→lost→restoring→restored and retry counter increments",
+      "Write unit tests for ContextLossOverlay: verify renders when status='lost'|'restoring', shows Reload Page button after 3 failed retries",
+      "Map all tests to T-BE-REL-002-01 and the 3 acceptance criteria from issue #36",
+      "Branch: feature/36-nfr-rel-002-frontend-tests"
+    ],
+    "files_to_read": [
+      "docs/features/NFR-REL-002/LOW_LEVEL_DESIGN.md"
+    ],
+    "summary": "Design for NFR-REL-002 is complete and merged. The LLD specifies WebGLContextGuard (R3F behavior component), contextRecoveryStore (Zustand slice), ContextLossOverlay (React UI), and the full recovery lifecycle with exponential backoff. Frontend-test agent must write TDD test suite covering all 3 acceptance criteria before frontend-coding agent implements production code."
+  },
+  "workflow_state": {
+    "workflow_type": "pure_greenfield",
+    "current_phase": "design",
+    "completed_phases": ["research", "architecture", "planning", "design"],
+    "remaining_phases": ["frontend-test", "frontend-coding", "frontend-review", "release"]
+  },
+  "alignment": {
+    "tcu_ids": ["TCU-NFR-REL-002"],
+    "forward_pass_score": 0.97,
+    "backward_pass_score": null,
+    "human_score": null,
+    "convergence_score": null
+  }
+}
