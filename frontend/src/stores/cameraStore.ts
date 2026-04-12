@@ -1,58 +1,31 @@
-/**
- * Store: cameraStore
- *
- * Manages camera state: position, target, fov, clipping planes, and zoom.
- * Default isometric camera position per LLD §3.1.
- *
- * FR: FR-SCENE-001
- * LLD: docs/features/FR-SCENE-001/LOW_LEVEL_DESIGN.md §3.1, §4.1
- *
- * Spectra-Agent: frontend-coding
- * Spectra-FRs: FR-SCENE-001
- */
-
 import { create } from 'zustand';
 
+export type CameraPreset = 'isometric' | 'top' | 'front' | 'right';
+
 export interface CameraState {
-  /** Camera position in world space [x, y, z] */
   position: [number, number, number];
-  /** Camera look-at target [x, y, z] */
   target: [number, number, number];
-  /** Vertical field of view in degrees */
-  fov: number;
-  /** Near clipping plane */
-  near: number;
-  /** Far clipping plane */
-  far: number;
-  /** Zoom level */
-  zoom: number;
+  activePreset: CameraPreset | null;
 }
 
 export interface CameraActions {
   setPosition: (position: [number, number, number]) => void;
   setTarget: (target: [number, number, number]) => void;
-  setFov: (fov: number) => void;
-  setZoom: (zoom: number) => void;
-  resetCamera: () => void;
+  applyPreset: (preset: CameraPreset) => void;
 }
 
-export type CameraStore = CameraState & CameraActions;
-
-const DEFAULT_CAMERA: CameraState = {
-  position: [10, 10, 10],
-  target: [0, 0, 0],
-  fov: 50,
-  near: 0.1,
-  far: 1000,
-  zoom: 1,
+const PRESETS: Record<CameraPreset, { position: [number, number, number]; target: [number, number, number] }> = {
+  isometric: { position: [20, 20, 20], target: [0, 0, 0] },
+  top: { position: [0, 30, 0], target: [0, 0, 0] },
+  front: { position: [0, 10, 30], target: [0, 0, 0] },
+  right: { position: [30, 10, 0], target: [0, 0, 0] },
 };
 
-export const useCameraStore = create<CameraStore>()((set) => ({
-  ...DEFAULT_CAMERA,
-
-  setPosition: (position) => set({ position }),
+export const useCameraStore = create<CameraState & CameraActions>()((set) => ({
+  position: [20, 20, 20],
+  target: [0, 0, 0],
+  activePreset: 'isometric',
+  setPosition: (position) => set({ position, activePreset: null }),
   setTarget: (target) => set({ target }),
-  setFov: (fov) => set({ fov }),
-  setZoom: (zoom) => set({ zoom }),
-  resetCamera: () => set({ ...DEFAULT_CAMERA }),
+  applyPreset: (preset) => set({ position: PRESETS[preset].position, target: PRESETS[preset].target, activePreset: preset }),
 }));
