@@ -1,6 +1,6 @@
 # Tech Stack Configuration — LegoBuilder
 #
-# This file defines the TECHNOLOGY CHOICES for LegoBuilder.
+# This file defines the TECHNOLOGY CHOICES for the LegoBuilder project.
 # It maps to the components defined in docs/NOTIONAL_ARCHITECTURE.md.
 #
 # Document Relationships:
@@ -9,9 +9,8 @@
 #   docs/tech_stack.yaml (this)    → WHICH technologies (framework choices)
 #   docs/TECHNICAL_ARCHITECTURE.md → HOW to implement (technical details)
 #
-# KEY DECISION: LegoBuilder is a client-only SPA with NO backend.
-# All computation, rendering, state, and persistence happen in the browser.
-# Backend, database, LLM, and server infrastructure sections are disabled.
+# LegoBuilder is a CLIENT-ONLY SPA — no backend server, no external APIs.
+# The entire application runs in the browser.
 
 # =============================================================================
 # PROJECT METADATA
@@ -19,15 +18,16 @@
 project:
   name: "LegoBuilder"
   version: "0.1.0"
-  description: "Browser-based 3D LEGO building application — client-only SPA"
+  description: "Browser-based 3D LEGO building application with snap-to-grid placement, undo/redo, and local persistence"
   type: "client-only-spa"
 
 # =============================================================================
-# BACKEND STACK — DISABLED (client-only SPA)
+# BACKEND STACK
 # =============================================================================
+# LegoBuilder has NO backend. This section is intentionally minimal.
 backend:
   enabled: false
-  rationale: "LegoBuilder is a client-only SPA. No server-side processing, authentication, or API needed for MVP."
+  rationale: "Client-only SPA — all logic runs in the browser, data persists in IndexedDB"
 
 # =============================================================================
 # FRONTEND STACK
@@ -43,232 +43,260 @@ frontend:
   framework:
     name: "React"
     version: "18.x"
-    rationale: "Component-based architecture matches UI Shell design; rich ecosystem for 3D integration via @react-three/fiber"
+    rationale: "Component-based architecture; excellent ecosystem for 3D (react-three/fiber); concurrent rendering for smooth UI"
 
   # Build tool
   build_tool:
     name: "Vite"
     version: "5.x"
-    rationale: "Fast HMR for development; optimized production builds with code splitting and tree shaking; native ESM support"
+    rationale: "Fast HMR for development; optimized production builds with tree-shaking; native ESM support"
 
-  # 3D Rendering
-  rendering_3d:
-    library: "Three.js"
-    version: "0.170.x"
-    react_binding: "@react-three/fiber"
-    react_binding_version: "8.x"
-    helpers: "@react-three/drei"
-    helpers_version: "9.x"
-    rationale: "Industry-standard WebGL library; @react-three/fiber provides declarative React integration; drei provides camera controls, helpers"
+  # 3D rendering library
+  3d_library:
+    name: "Three.js via @react-three/fiber"
+    three_version: "0.160.x"
+    r3f_version: "8.x"
+    drei_version: "9.x"  # @react-three/drei for helpers
+    rationale: "React-idiomatic 3D rendering; declarative scene graph; automatic disposal and reconciliation"
 
-  # Spatial acceleration (for raycasting performance)
-  spatial_acceleration:
-    library: "three-mesh-bvh"
-    version: "0.7.x"
-    rationale: "BVH-accelerated raycasting for logarithmic mouse-picking performance; critical for NFR-PERF-001 (60 FPS at 500 bricks)"
+  # Performance libraries
+  performance:
+    bvh_library: "three-mesh-bvh"
+    rationale: "BVH-accelerated raycasting for O(log n) mouse-to-brick intersection; critical for ghost preview at 500 bricks"
 
   # UI Component library
   ui_library:
     name: "Tailwind CSS"
     version: "3.x"
-    rationale: "Utility-first CSS for rapid UI development; small bundle size; responsive design utilities for desktop+tablet"
+    rationale: "Utility-first CSS; rapid UI development; small production bundle with purging; PRD specifies Tailwind"
 
   # State management
   state_management:
     name: "Zustand"
     version: "4.x"
-    immutability: "Immer"
-    immutability_version: "10.x"
-    rationale: "Lightweight, minimal boilerplate; Immer enables immutable state updates with mutable syntax; structural sharing for efficient undo/redo snapshots"
-
-  # Persistence (browser storage)
-  persistence:
-    library: "idb"
-    version: "8.x"
-    storage_type: "IndexedDB"
-    rationale: "Promise-based IndexedDB wrapper; larger storage quota than localStorage; supports structured data for scene serialization"
+    middleware: "Immer"
+    rationale: "Lightweight (1KB); immutable updates via Immer; no boilerplate; PRD specifies Zustand + Immer"
 
   # Package manager
   package_manager:
     name: "npm"
-    rationale: "Universal availability; lockfile support; no additional tooling required"
+    rationale: "Universal availability; lockfile for reproducible builds; no additional tooling required"
 
   # Testing
   testing:
     unit: "Vitest"
-    unit_version: "2.x"
     component: "React Testing Library"
-    component_version: "16.x"
     e2e: "Playwright"
-    e2e_version: "1.x"
-    rationale: "Vitest is Vite-native with fast execution; RTL for component testing; Playwright for cross-browser E2E"
+    rationale: "Vitest is Vite-native (shared config, fast); RTL for component behavior testing; Playwright for E2E browser testing"
 
-  # Linting / Formatting
+  # Linting
   linter:
     name: "ESLint"
-    version: "9.x"
+    version: "8.x"
     formatter: "Prettier"
-    formatter_version: "3.x"
-    rationale: "Industry standard; TypeScript-aware rules; consistent code formatting"
+    rationale: "Industry standard for TypeScript/React; Prettier for consistent formatting"
+
+  # Type checking
+  type_checker:
+    name: "TypeScript compiler (tsc)"
+    strict_mode: true
+    rationale: "Built-in type checking; strict mode catches null/undefined errors in 3D math"
 
 # =============================================================================
-# DATABASE & STORAGE — DISABLED (client-only, uses IndexedDB)
+# DATABASE & STORAGE
 # =============================================================================
+# LegoBuilder uses browser-native storage only — no server databases.
 database:
-  enabled: false
-  rationale: "All persistence uses browser IndexedDB via the idb wrapper. No server-side database needed."
-  client_storage:
+  primary:
     type: "IndexedDB"
     wrapper: "idb"
-    max_projects: 5
-    auto_save_interval_ms: 5000
+    idb_version: "8.x"
+    rationale: "Browser-native async storage; large quota (GB+); structured data support; idb wrapper provides Promise-based API; PRD specifies IndexedDB via idb"
+
+  # No vector database, cache, object storage, or messaging needed
+  vector:
+    type: "none"
+  cache:
+    type: "none"
+    rationale: "In-memory state via Zustand serves as the cache; no external cache needed"
+  object_storage:
+    type: "none"
+  messaging:
+    enabled: false
+    rationale: "Client-only app with no inter-service communication"
 
 # =============================================================================
-# LLM & AI SERVICES — DISABLED
+# LLM & AI SERVICES
 # =============================================================================
+# LegoBuilder has NO AI/LLM features.
 llm:
   enabled: false
-  rationale: "LegoBuilder has no AI/LLM features. All components are deterministic."
+  rationale: "All components are deterministic; no AI/ML features in MVP"
 
 # =============================================================================
-# AGENTIC WORKFLOWS — DISABLED
+# AGENTIC WORKFLOWS
 # =============================================================================
+# LegoBuilder has NO agentic features.
 agentic_workflows:
   enabled: false
-  rationale: "LegoBuilder has no AI/agentic features. All business logic is deterministic."
+  rationale: "Pure deterministic application; no AI agents or workflows"
 
 # =============================================================================
-# VOICE & COMMUNICATION — DISABLED
+# VOICE & COMMUNICATION
 # =============================================================================
 voice_communication:
   enabled: false
+  rationale: "No voice or real-time communication features"
 
 # =============================================================================
-# CUSTOMER SUPPORT — DISABLED
+# CUSTOMER SUPPORT
 # =============================================================================
 customer_support:
   enabled: false
+  rationale: "MVP is a standalone tool; no customer support features"
 
 # =============================================================================
-# ENTERPRISE PRODUCT INTELLIGENCE — DISABLED
+# ENTERPRISE PRODUCT INTELLIGENCE
 # =============================================================================
 product_intelligence:
   enabled: false
+  rationale: "Standalone product; not part of a multi-product organization"
 
 # =============================================================================
 # INFRASTRUCTURE & DEPLOYMENT
 # =============================================================================
 infrastructure:
-  # Hosting (static site)
-  hosting:
-    type: "static"
-    rationale: "Client-only SPA requires only static file hosting; no server runtime needed"
+  # Deployment target
+  deployment:
+    type: "static-site"
+    rationale: "Client-only SPA; no server needed; deploy as static files"
 
-  # Container runtime (for local development)
+  # Container runtime (for Docker/KIND deployment per Spectra default)
   container:
     runtime: "Docker"
-    rationale: "Consistent development environment; reproducible builds"
+    orchestration: "KIND"
+    node_port: 30500
+    rationale: "Spectra default deployment target; nginx serves static build in production container"
 
   # CI/CD
   ci_cd:
     platform: "GitHub Actions"
-    rationale: "Native GitHub integration; free for public repos; supports Node.js workflows"
+    rationale: "Native GitHub integration; free for public repos; excellent ecosystem"
+
+  # No cloud provider needed for MVP (static hosting)
+  cloud:
+    provider: "none"
+    rationale: "MVP deploys to Docker/KIND; cloud hosting is a future consideration"
+
+  # No IaC needed for MVP
+  iac:
+    tool: "none"
+    rationale: "Docker/KIND deployment; no cloud infrastructure to manage"
+
+  # No secrets management needed
+  secrets:
+    tool: "none"
+    rationale: "Client-only app with no API keys or server secrets"
 
 # =============================================================================
 # OBSERVABILITY & MONITORING
 # =============================================================================
+# Client-side observability only
 observability:
-  # Client-side error tracking
-  errors:
-    platform: "console"
-    rationale: "MVP uses browser console for error reporting; Sentry can be added post-MVP"
+  logging:
+    platform: "Browser Console (structured)"
+    structured: true
+    rationale: "Client-only app; structured console logging for development and debugging"
 
-  # Performance monitoring
-  performance:
-    tool: "browser-native"
-    apis: ["Performance API", "requestAnimationFrame timing"]
-    rationale: "Built-in browser APIs for FPS monitoring and performance profiling; no external dependencies"
+  metrics:
+    platform: "Performance API (browser-native)"
+    rationale: "FPS monitoring, render timing, and memory usage via browser Performance API"
+
+  tracing:
+    platform: "none"
+    rationale: "No distributed tracing needed for client-only app"
+
+  errors:
+    platform: "window.onerror + Error Boundary"
+    rationale: "React Error Boundaries catch component errors; global handler for unhandled exceptions"
 
 # =============================================================================
 # DEVELOPMENT TOOLS
 # =============================================================================
 development:
-  # IDE
   ide:
     primary: "VS Code / Cursor"
 
-  # Local development
   local:
     dev_server: "Vite dev server"
     hot_reload: true
-    containerization: "Docker Compose"
+    rationale: "Vite provides instant HMR; no Docker needed for local development"
 
-  # Documentation
   docs:
-    storybook: false
-    rationale: "Storybook deferred to post-MVP; 3D components are better tested in-app"
+    api: "TypeDoc (auto-generated from TSDoc comments)"
 
 # =============================================================================
 # COMPONENT-TO-TECHNOLOGY MAPPING
 # =============================================================================
-# Maps notional architecture components to concrete technologies
 component_mapping:
-  ui_shell:
-    notional: "UI Shell"
-    technology: "React 18 + Tailwind CSS"
-    layer: "Presentation"
-
   viewport_3d:
     notional: "3D Viewport"
-    technology: "@react-three/fiber + Three.js + @react-three/drei"
-    layer: "Presentation"
+    technology: "React + @react-three/fiber + Three.js"
+
+  ui_panels:
+    notional: "UI Panels (Toolbar, Palette, Properties)"
+    technology: "React + Tailwind CSS"
+
+  ghost_brick:
+    notional: "Ghost Brick Overlay"
+    technology: "@react-three/fiber (transparent mesh)"
 
   scene_manager:
     notional: "Scene Manager"
-    technology: "Zustand store + Immer"
-    layer: "Application"
-
-  edit_history:
-    notional: "Edit History Manager"
-    technology: "Zustand middleware + Immer (command pattern)"
-    layer: "Application"
+    technology: "React hooks + @react-three/fiber scene graph"
 
   brick_placement:
     notional: "Brick Placement Engine"
-    technology: "TypeScript (pure logic) + Three.js raycasting"
-    layer: "Application"
+    technology: "Three.js Raycaster + three-mesh-bvh + custom occupancy map"
 
   selection_transform:
-    notional: "Selection & Transform System"
-    technology: "Zustand store + Three.js TransformControls"
-    layer: "Application"
+    notional: "Selection & Transform"
+    technology: "Three.js Raycaster + @react-three/drei helpers"
 
-  brick_catalog:
-    notional: "Brick Catalog"
-    technology: "TypeScript (pure data + Three.js BufferGeometry)"
-    layer: "Domain"
-
-  occupancy_map:
-    notional: "Spatial Index / Occupancy Map"
-    technology: "TypeScript Map<string, BrickId> (grid-key lookup)"
-    layer: "Domain"
+  command_system:
+    notional: "Command System"
+    technology: "TypeScript command pattern + Zustand middleware"
 
   camera_controller:
     notional: "Camera Controller"
     technology: "@react-three/drei OrbitControls"
-    layer: "Domain"
+
+  state_store:
+    notional: "State Store"
+    technology: "Zustand + Immer middleware"
+
+  brick_catalog:
+    notional: "Brick Catalog"
+    technology: "TypeScript constants + Three.js BoxGeometry"
 
   persistence_manager:
     notional: "Persistence Manager"
     technology: "idb (IndexedDB wrapper)"
-    layer: "Data"
 
   export_import:
     notional: "Export/Import Engine"
-    technology: "TypeScript JSON serialization + schema validation"
-    layer: "Data"
+    technology: "Native File API + JSON serialization + html2canvas/Three.js renderer.domElement.toDataURL"
 
   performance_optimizer:
     notional: "Performance Optimizer"
-    technology: "Three.js InstancedMesh + three-mesh-bvh"
-    layer: "Cross-Cutting"
+    technology: "Three.js InstancedMesh + three-mesh-bvh + custom 3D occupancy grid"
+
+# =============================================================================
+# TECH PACK REFERENCE
+# =============================================================================
+# No pre-built tech packs match this stack exactly.
+# Custom scaffolding based on React + Vite + Three.js.
+tech_packs:
+  - name: "custom-react-vite-threejs"
+    path: "custom"
+    description: "Custom scaffold for React 18 + Vite + Three.js (@react-three/fiber) SPA"
