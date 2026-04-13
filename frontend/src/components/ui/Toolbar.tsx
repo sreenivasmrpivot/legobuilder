@@ -1,16 +1,44 @@
+import React from 'react';
+import { useUndoRedo } from '../../hooks/useUndoRedo';
+import { useSceneStore } from '../../stores/sceneStore';
+import { useSelectionStore } from '../../stores/selectionStore';
+
 export function Toolbar() {
+  const { undo, redo, canUndo, canRedo } = useUndoRedo();
+  const clearScene = useSceneStore((s) => s.clearScene);
+  const removeBrick = useSceneStore((s) => s.removeBrick);
+  const selectedBrickId = useSelectionStore((s) => s.selectedBrickId);
+
   return (
-    <header className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-200 shadow-sm">
-      <h1 className="text-lg font-bold text-gray-800 mr-4">LegoBuilder</h1>
-      <div className="flex gap-1">
-        <button className="px-3 py-1 text-sm rounded hover:bg-gray-100 disabled:opacity-50" data-testid="undo-btn">Undo</button>
-        <button className="px-3 py-1 text-sm rounded hover:bg-gray-100 disabled:opacity-50" data-testid="redo-btn">Redo</button>
-      </div>
-      <div className="flex-1" />
-      <div className="flex gap-1">
-        <button className="px-3 py-1 text-sm rounded hover:bg-gray-100" data-testid="save-btn">Save</button>
-        <button className="px-3 py-1 text-sm rounded hover:bg-gray-100" data-testid="export-btn">Export</button>
-      </div>
-    </header>
+    <div className="toolbar" role="toolbar" aria-label="Scene toolbar">
+      <button
+        aria-label="Undo"
+        onClick={() => undo()}
+        disabled={!canUndo}
+      >
+        Undo
+      </button>
+      <button
+        aria-label="Redo"
+        onClick={() => redo()}
+        disabled={!canRedo}
+      >
+        Redo
+      </button>
+      <button
+        aria-label="New"
+        onClick={() => clearScene()}
+      >
+        New
+      </button>
+      {selectedBrickId && (
+        <button
+          aria-label="Delete"
+          onClick={() => removeBrick(selectedBrickId)}
+        >
+          Delete
+        </button>
+      )}
+    </div>
   );
 }
