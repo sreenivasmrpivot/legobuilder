@@ -3,16 +3,18 @@ import { ViewportCanvas } from './ViewportCanvas';
 import { BrickInstances } from './BrickInstances';
 import { GroundGrid } from './GroundGrid';
 import { Baseplate } from './Baseplate';
+import { OrbitControls } from '@react-three/drei';
 import { useBrickPlacement } from '../../hooks/useBrickPlacement';
 import { useSelection } from '../../hooks/useSelection';
-import { useCameraControls } from '../../hooks/useCameraControls';
 import { useSceneStore } from '../../stores/sceneStore';
+import { useSelectionStore } from '../../stores/selectionStore';
 
 export function Viewport() {
   const { handlePointerDown, handlePointerMove, handlePointerUp, ghostBrick } =
     useBrickPlacement();
   const { handleBrickClick } = useSelection();
   const bricks = useSceneStore((s) => s.bricks);
+  const selectedBrickId = useSelectionStore((s) => s.selectedBrickId);
 
   return (
     <div className="viewport" style={{ width: '100%', height: '100%' }}>
@@ -28,7 +30,14 @@ export function Viewport() {
         <BrickInstances
           bricks={bricks}
           onBrickClick={handleBrickClick}
-          selectedBrickId={null}
+          selectedBrickId={selectedBrickId}
+        />
+        <OrbitControls
+          enableDamping
+          dampingFactor={0.1}
+          minDistance={5}
+          maxDistance={50}
+          maxPolarAngle={Math.PI / 2.1}
         />
         {ghostBrick && (
           <mesh

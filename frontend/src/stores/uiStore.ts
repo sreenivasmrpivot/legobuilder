@@ -1,13 +1,15 @@
 import { create } from 'zustand';
 
+export type ActiveTool = 'place' | 'select' | 'delete';
+
 export interface UiState {
   activeBrickType: string;
   activeColor: string;
-  activeTool: string;
+  activeTool: ActiveTool;
   rotation: number;
   setActiveBrickType: (type: string) => void;
   setActiveColor: (color: string) => void;
-  setActiveTool: (tool: string) => void;
+  setActiveTool: (tool: ActiveTool) => void;
   rotatePlacementPreview: () => void;
 }
 
@@ -22,3 +24,6 @@ export const useUiStore = create<UiState>((set) => ({
   rotatePlacementPreview: () =>
     set((state) => ({ rotation: (state.rotation + 90) % 360 })),
 }));
+
+/** @deprecated Use useUiStore instead */
+export const useUIStore = useUiStore;

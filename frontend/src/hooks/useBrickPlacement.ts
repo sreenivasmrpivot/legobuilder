@@ -26,6 +26,9 @@ export function useBrickPlacement() {
 
   const handlePointerDown = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
+      // Only place bricks when the active tool is 'place'
+      if (activeTool !== 'place') return;
+
       const snapped = placementEngine.snapToGrid(e.point);
       if (!snapped) return;
 

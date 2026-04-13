@@ -7,6 +7,8 @@ import { useUiStore } from '../stores/uiStore';
 export function useKeyboardShortcuts() {
   const undo = useHistoryStore((s) => s.undo);
   const redo = useHistoryStore((s) => s.redo);
+  const canUndo = useHistoryStore((s) => s.canUndo);
+  const canRedo = useHistoryStore((s) => s.canRedo);
   const removeBrick = useSceneStore((s) => s.removeBrick);
   const selectedBrickId = useSelectionStore((s) => s.selectedBrickId);
   const clearSelection = useSelectionStore((s) => s.clearSelection);
@@ -28,21 +30,21 @@ export function useKeyboardShortcuts() {
       // Ctrl+Shift+Z → Redo
       if (e.ctrlKey && e.shiftKey && e.key === 'z') {
         e.preventDefault();
-        redo();
+        if (canRedo) redo();
         return;
       }
 
       // Ctrl+Z → Undo
       if (e.ctrlKey && e.key === 'z') {
         e.preventDefault();
-        undo();
+        if (canUndo) undo();
         return;
       }
 
       // Ctrl+Y → Redo
       if (e.ctrlKey && e.key === 'y') {
         e.preventDefault();
-        redo();
+        if (canRedo) redo();
         return;
       }
 
@@ -57,6 +59,7 @@ export function useKeyboardShortcuts() {
 
       // Escape → Clear selection
       if (e.key === 'Escape') {
+        e.preventDefault();
         clearSelection();
         return;
       }
@@ -69,7 +72,7 @@ export function useKeyboardShortcuts() {
         return;
       }
     },
-    [undo, redo, removeBrick, selectedBrickId, clearSelection, rotatePlacementPreview]
+    [undo, redo, canUndo, canRedo, removeBrick, selectedBrickId, clearSelection, rotatePlacementPreview]
   );
 
   useEffect(() => {
