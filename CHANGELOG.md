@@ -7,6 +7,60 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [1.0.1] — 2026-04-13
+
+### 🐛 Bug Fix — BUG-88: All Interactive Elements Non-Functional
+
+This patch release resolves a critical regression where the LegoBuilder application rendered its full UI visually but **all interactive elements were completely non-functional** — users could not click, drag, or use keyboard shortcuts.
+
+#### Root Causes Fixed
+
+| Root Cause | Description | Fix |
+|------------|-------------|-----|
+| RC-1 | `useBrickPlacement` not mounted; pointer event handlers not spread onto canvas | Implemented full hook, mounted in `Viewport.tsx`, spread handlers onto `ViewportCanvas` |
+| RC-2 | `useKeyboardShortcuts` not called in `App.tsx` | Implemented full hook with all shortcuts (R, Delete, Escape, Ctrl+Z/Y), mounted in `App.tsx` |
+| RC-3 | Toolbar `onClick` handlers were no-ops | Wired buttons to `useUndoRedo` + `sceneStore` actions |
+| RC-4 | `BrickPalette` not calling `uiStore` actions on click | Wired click handlers to `setActiveBrickType` / `setActiveColor` with `aria-pressed` |
+| RC-5 | `BrickInstances` not wiring `onClick` to `selectionManager` | Implemented `useSelection` with `handleBrickClick` and `stopPropagation` |
+| RC-6 | CSS `pointer-events: none` on `.canvas-container` blocking all DOM events | Removed blocking CSS; ensured `ViewportCanvas` forwards pointer events to R3F `Canvas` |
+
+#### Files Changed
+
+- `frontend/src/index.css` — RC-6: Removed `pointer-events: none` from canvas-container
+- `frontend/src/components/viewport/ViewportCanvas.tsx` — RC-6/RC-1: Accepts and forwards pointer event props
+- `frontend/src/hooks/useBrickPlacement.ts` — RC-1: Full implementation with ghost brick state
+- `frontend/src/hooks/useSelection.ts` — RC-5: `handleBrickClick` wired to `selectionManager`
+- `frontend/src/hooks/useKeyboardShortcuts.ts` — RC-2: All keyboard shortcuts with input field guard
+- `frontend/src/hooks/useUndoRedo.ts` — RC-3: Exposes `undo`/`redo`/`canUndo`/`canRedo`
+- `frontend/src/components/ui/BrickPalette.tsx` — RC-4: Click handlers wired to `uiStore`
+- `frontend/src/components/ui/Toolbar.tsx` — RC-3: Buttons wired to stores with `role=toolbar`
+- `frontend/src/components/viewport/Viewport.tsx` — RC-1: Mounts hooks, spreads handlers
+- `frontend/src/components/App.tsx` — RC-2: Mounts `useKeyboardShortcuts`
+- `frontend/src/stores/uiStore.ts` — Added `rotatePlacementPreview` action
+
+#### Regression Tests Added
+
+| Test ID | Description | Root Cause |
+|---------|-------------|------------|
+| T-FE-BUG-88-01 | `useBrickPlacement` wires pointer events | RC-1 |
+| T-FE-BUG-88-01b | `Viewport.tsx` mounts `useBrickPlacement` + `useSelection` | RC-1 |
+| T-FE-BUG-88-02 | `BrickPalette` click handlers wire to `uiStore` | RC-4 |
+| T-FE-BUG-88-03 | Toolbar buttons wire to stores | RC-3 |
+| T-FE-BUG-88-04 | Keyboard shortcuts wire to stores | RC-2 |
+| T-FE-BUG-88-04b | `App.tsx` mounts `useKeyboardShortcuts` | RC-2 |
+| T-FE-BUG-88-05 | `useSelection` wires brick click to `selectionStore` | RC-5 |
+| T-FE-BUG-88-06 | Ghost brick appears on hover | RC-1 |
+| T-FE-BUG-88-06b | CSS `pointer-events` audit | RC-6 |
+
+#### References
+
+- Issue: [#88](https://github.com/sreenivasmrpivot/legobuilder/issues/88)
+- Fix PR: [#123](https://github.com/sreenivasmrpivot/legobuilder/pull/123)
+- LLD PR: [#122](https://github.com/sreenivasmrpivot/legobuilder/pull/122)
+- App ID: `app-legobuilder-bugfix-20260412-gold`
+
+---
+
 ## [1.0.0] — 2026-04-12
 
 ### 🎉 Initial Release — LegoBuilder v1.0.0
