@@ -1,30 +1,29 @@
-/**
- * Store: uiStore
- *
- * Manages UI state: active tool, sidebar visibility, modal state,
- * and notification messages.
- *
- * This is a scaffold stub. Feature implementation will be done in
- * feature branches per the PM-Issues agent's issue plan.
- */
-
 import { create } from 'zustand';
 
 export type ActiveTool = 'place' | 'select' | 'delete';
 
-interface UIState {
+export interface UiState {
+  activeBrickType: string;
+  activeColor: string;
   activeTool: ActiveTool;
-  sidebarOpen: boolean;
+  rotation: number;
+  setActiveBrickType: (type: string) => void;
+  setActiveColor: (color: string) => void;
   setActiveTool: (tool: ActiveTool) => void;
-  toggleSidebar: () => void;
+  rotatePlacementPreview: () => void;
 }
 
-export const useUIStore = create<UIState>()((set) => ({
+export const useUiStore = create<UiState>((set) => ({
+  activeBrickType: '2x4',
+  activeColor: '#FF0000',
   activeTool: 'place',
-  sidebarOpen: true,
-
+  rotation: 0,
+  setActiveBrickType: (type) => set({ activeBrickType: type }),
+  setActiveColor: (color) => set({ activeColor: color }),
   setActiveTool: (tool) => set({ activeTool: tool }),
-
-  toggleSidebar: () =>
-    set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+  rotatePlacementPreview: () =>
+    set((state) => ({ rotation: (state.rotation + 90) % 360 })),
 }));
+
+/** @deprecated Use useUiStore instead */
+export const useUIStore = useUiStore;

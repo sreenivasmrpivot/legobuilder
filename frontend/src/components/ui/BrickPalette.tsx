@@ -1,32 +1,55 @@
-import { BRICK_CATALOG, COLOR_PALETTE } from '@/engine/brickCatalog';
+import React from 'react';
+import { useUiStore } from '../../stores/uiStore';
+
+const BRICK_TYPES = ['1x1', '1x2', '2x2', '2x4'];
+const BRICK_COLORS = [
+  '#FF0000',
+  '#00FF00',
+  '#0000FF',
+  '#FFFF00',
+  '#FF8800',
+  '#FFFFFF',
+  '#000000',
+  '#888888',
+];
 
 export function BrickPalette() {
+  const activeBrickType = useUiStore((s) => s.activeBrickType);
+  const activeColor = useUiStore((s) => s.activeColor);
+  const setActiveBrickType = useUiStore((s) => s.setActiveBrickType);
+  const setActiveColor = useUiStore((s) => s.setActiveColor);
+
   return (
-    <aside className="w-60 bg-white border-r border-gray-200 p-4 overflow-y-auto">
-      <h2 className="text-sm font-semibold text-gray-600 uppercase mb-3">Bricks</h2>
-      <div className="grid grid-cols-2 gap-2 mb-6">
-        {Object.values(BRICK_CATALOG).map((brick) => (
+    <div className="brick-palette" role="region" aria-label="Brick palette">
+      <div className="brick-types">
+        <h3>Brick Types</h3>
+        {BRICK_TYPES.map((type) => (
           <button
-            key={brick.type}
-            className="p-2 text-xs text-center rounded border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-colors"
-            data-testid={`brick-${brick.type}`}
+            key={type}
+            role="button"
+            aria-label={`${type} brick`}
+            aria-pressed={activeBrickType === type}
+            className={`brick-type-btn ${activeBrickType === type ? 'active' : ''}`}
+            onClick={() => setActiveBrickType(type)}
           >
-            {brick.name}
+            {type}
           </button>
         ))}
       </div>
-      <h2 className="text-sm font-semibold text-gray-600 uppercase mb-3">Colors</h2>
-      <div className="grid grid-cols-5 gap-2">
-        {COLOR_PALETTE.map((color) => (
+      <div className="brick-colors">
+        <h3>Colors</h3>
+        {BRICK_COLORS.map((color) => (
           <button
             key={color}
-            className="w-8 h-8 rounded-full border-2 border-gray-300 hover:border-blue-400 transition-colors"
+            role="button"
+            aria-label={`${color} color`}
+            aria-pressed={activeColor === color}
+            className={`color-swatch ${activeColor === color ? 'active' : ''}`}
             style={{ backgroundColor: color }}
-            data-testid={`color-${color}`}
-            aria-label={`Select color ${color}`}
+            onClick={() => setActiveColor(color)}
           />
         ))}
       </div>
-    </aside>
+    </div>
   );
 }
