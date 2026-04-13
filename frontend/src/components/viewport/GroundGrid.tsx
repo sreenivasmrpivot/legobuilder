@@ -11,7 +11,6 @@
  * Spectra-FRs: FR-SCENE-001
  */
 
-import React from 'react';
 import { useSceneStore } from '../../stores/sceneStore';
 
 export interface GroundGridProps {

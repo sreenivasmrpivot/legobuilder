@@ -1,4 +1,3 @@
-import React from 'react';
 import { useUiStore } from '../../stores/uiStore';
 
 const BRICK_TYPES = ['1x1', '1x2', '2x2', '2x4'];

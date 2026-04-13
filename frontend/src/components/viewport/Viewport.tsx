@@ -1,4 +1,3 @@
-import React from 'react';
 import { ViewportCanvas } from './ViewportCanvas';
 import { BrickInstances } from './BrickInstances';
 import { GroundGrid } from './GroundGrid';
@@ -29,7 +28,7 @@ export function Viewport() {
         <Baseplate />
         <BrickInstances
           bricks={bricks}
-          onBrickClick={handleBrickClick}
+          onBrickClick={handleBrickClick as (brickId: string, event: unknown) => void}
           selectedBrickId={selectedBrickId}
         />
         <OrbitControls

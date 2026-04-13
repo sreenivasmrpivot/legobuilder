@@ -1,14 +1,9 @@
-import React, { Suspense } from 'react';
+import { Suspense, type ReactNode } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { useSceneStore } from '../../stores/sceneStore';
 import { useCameraStore } from '../../stores/cameraStore';
 import { SceneErrorBoundary } from './SceneErrorBoundary';
-import type { ThreeEvent } from '@react-three/fiber';
 
-/**
- * Validate that a position is a valid [number, number, number] tuple
- * with finite values.
- */
 function isValidPosition(pos: unknown): pos is [number, number, number] {
   return (
     Array.isArray(pos) &&
@@ -20,10 +15,10 @@ function isValidPosition(pos: unknown): pos is [number, number, number] {
 const DEFAULT_POSITION: [number, number, number] = [10, 10, 10];
 
 export interface ViewportCanvasProps {
-  children?: React.ReactNode;
-  onPointerDown?: (e: ThreeEvent<PointerEvent>) => void;
-  onPointerMove?: (e: ThreeEvent<PointerEvent>) => void;
-  onPointerUp?: (e: ThreeEvent<PointerEvent>) => void;
+  children?: ReactNode;
+  onPointerDown?: (e: unknown) => void;
+  onPointerMove?: (e: unknown) => void;
+  onPointerUp?: (e: unknown) => void;
 }
 
 export function ViewportCanvas({
@@ -50,9 +45,9 @@ export function ViewportCanvas({
       <SceneErrorBoundary>
         <Canvas
           camera={{ position: safePosition, fov, near, far }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
+          onPointerDown={onPointerDown as never}
+          onPointerMove={onPointerMove as never}
+          onPointerUp={onPointerUp as never}
           style={{ background: backgroundColor }}
         >
           <Suspense fallback={null}>{children}</Suspense>

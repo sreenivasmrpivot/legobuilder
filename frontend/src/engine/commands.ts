@@ -1,6 +1,6 @@
 import type { Command } from '@/types/commands';
 import type { Brick } from '@/types/brick';
-import type { SceneState } from '@/stores/sceneStore';
+import type { SceneStore } from '@/stores/sceneStore';
 import { OccupancyMap } from './occupancyMap';
 
 export class PlaceBrickCommand implements Command {
@@ -8,7 +8,7 @@ export class PlaceBrickCommand implements Command {
 
   constructor(
     private brick: Brick,
-    private sceneStore: SceneState,
+    private sceneStore: SceneStore,
     private occupancyMap: OccupancyMap
   ) {
     this.description = `Place ${brick.type} at ${brick.position}`;
@@ -30,7 +30,7 @@ export class RemoveBrickCommand implements Command {
 
   constructor(
     private brick: Brick,
-    private sceneStore: SceneState,
+    private sceneStore: SceneStore,
     private occupancyMap: OccupancyMap
   ) {
     this.description = `Remove ${brick.type} from ${brick.position}`;

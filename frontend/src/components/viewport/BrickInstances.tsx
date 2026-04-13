@@ -17,7 +17,8 @@
  * Spectra-Tests: T-E2E-EDIT-001-01
  */
 
-import React, { useRef, useEffect, useMemo, useCallback } from 'react';
+import { useRef, useEffect, useMemo, useCallback, memo } from 'react';
+import type { FC } from 'react';
 import * as THREE from 'three';
 import type { InstancedMesh as InstancedMeshType } from 'three';
 import { useSelectionStore } from '../../stores/selectionStore';
@@ -45,6 +46,10 @@ const MAX_INSTANCES = 500;
 export interface BrickInstancesProps {
   /** Array of all placed bricks from sceneStore */
   bricks: PlacedBrick[];
+  /** Called when a brick is clicked in the viewport */
+  onBrickClick?: (brickId: string, event: unknown) => void;
+  /** ID of the currently selected brick */
+  selectedBrickId?: string | null;
 }
 
 /**
@@ -102,7 +107,9 @@ function applyHighlight(
 
   // Step 1: Reset all instance colors to their base color
   for (let i = 0; i < bricks.length; i++) {
-    tempColor.set(bricks[i].color);
+    const b = bricks[i];
+    if (!b) continue;
+    tempColor.set(b.color);
     mesh.setColorAt(i, tempColor);
   }
 
@@ -111,6 +118,7 @@ function applyHighlight(
     const selectedIndex = brickIdToIndex.get(selectedBrickId);
     if (selectedIndex !== undefined && selectedIndex < bricks.length) {
       const brick = bricks[selectedIndex];
+      if (!brick) return;
       tempColor.set(brick.color).multiplyScalar(HIGHLIGHT_FACTOR);
       // THREE.Color clamps each channel to [0, 1] internally
       mesh.setColorAt(selectedIndex, tempColor);
@@ -127,7 +135,7 @@ function applyHighlight(
 // Component
 // ---------------------------------------------------------------------------
 
-export const BrickInstances: React.FC<BrickInstancesProps> = React.memo(
+export const BrickInstances: FC<BrickInstancesProps> = memo(
   ({ bricks }) => {
     const meshRef = useRef<InstancedMeshType>(null);
 
@@ -156,7 +164,8 @@ export const BrickInstances: React.FC<BrickInstancesProps> = React.memo(
 
       for (let i = 0; i < bricks.length; i++) {
         const brick = bricks[i];
-        dummy.position.set(brick.position.x, brick.position.y, brick.position.z);
+        if (!brick) continue;
+        dummy.position.set(brick.position[0], brick.position[1], brick.position[2]);
         dummy.rotation.set(0, (brick.rotation * Math.PI) / 2, 0);
         dummy.updateMatrix();
         mesh.setMatrixAt(i, dummy.matrix);

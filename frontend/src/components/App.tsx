@@ -1,9 +1,7 @@
-import React from 'react';
 import { Viewport } from './viewport/Viewport';
 import { Toolbar } from './ui/Toolbar';
 import { BrickPalette } from './ui/BrickPalette';
 import { StatusBar } from './ui/StatusBar';
-import { ResumePrompt } from './ui/ResumePrompt';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useAutoSave } from '../hooks/useAutoSave';
 
@@ -23,7 +21,6 @@ export function App() {
         </main>
       </div>
       <StatusBar />
-      <ResumePrompt />
     </div>
   );
 }

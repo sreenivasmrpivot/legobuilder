@@ -1,14 +1,15 @@
 import { useCallback } from 'react';
-import { selectionManager } from '../engine/selectionManager';
-import type { ThreeEvent } from '@react-three/fiber';
+import { useSelectionStore } from '../stores/selectionStore';
 
 export function useSelection() {
+  const setSelectedBrickId = useSelectionStore((s) => s.setSelectedBrickId);
+
   const handleBrickClick = useCallback(
-    (brickId: string, event: ThreeEvent<MouseEvent>) => {
-      event.stopPropagation();
-      selectionManager.selectBrick(brickId);
+    (brickId: string, event: { stopPropagation?: () => void }) => {
+      event.stopPropagation?.();
+      setSelectedBrickId(brickId);
     },
-    []
+    [setSelectedBrickId],
   );
 
   return {

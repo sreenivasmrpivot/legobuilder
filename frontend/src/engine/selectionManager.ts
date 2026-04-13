@@ -98,6 +98,10 @@ export function createSelectionManager(
       }
 
       const hit = intersections[0];
+      if (!hit) {
+        storeAccessor.clearSelection();
+        return null;
+      }
 
       // Guard: instanceId undefined in intersection (LLD Section 7.1 condition 1)
       if (hit.instanceId === undefined) {

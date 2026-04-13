@@ -24,3 +24,5 @@ export interface Brick {
   rotation: number; // 0, 90, 180, 270
   color: string;
 }
+
+export type PlacedBrick = Brick;

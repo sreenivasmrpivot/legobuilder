@@ -8,9 +8,9 @@
  * Spectra-FRs: FR-EDIT-001
  */
 
-import React from 'react';
+import { StrictMode } from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './components/App';
+import { App } from './components/App';
 import './index.css';
 import { useSelectionStore } from './stores/selectionStore';
 
@@ -30,7 +30,7 @@ if (import.meta.env.DEV) {
 // ---------------------------------------------------------------------------
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
+  <StrictMode>
     <App />
-  </React.StrictMode>,
+  </StrictMode>,
 );

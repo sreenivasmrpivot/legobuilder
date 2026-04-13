@@ -19,7 +19,7 @@
  * Spectra-FRs: NFR-REL-001
  */
 
-import React from 'react';
+import type { FC } from 'react';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,7 +46,7 @@ export interface ResumePromptProps {
  * ResumePrompt renders an accessible dialog for crash recovery.
  * It displays session information and provides Resume / Start Fresh actions.
  */
-export const ResumePrompt: React.FC<ResumePromptProps> = ({
+export const ResumePrompt: FC<ResumePromptProps> = ({
   sessionId,
   lastSavedAt,
   snapshotCount,

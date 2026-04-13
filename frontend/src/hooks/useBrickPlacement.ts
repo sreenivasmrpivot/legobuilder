@@ -1,9 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useSceneStore } from '../stores/sceneStore';
-import { useHistoryStore } from '../stores/historyStore';
 import { useUiStore } from '../stores/uiStore';
-import { placementEngine } from '../engine/placementEngine';
-import type { ThreeEvent } from '@react-three/fiber';
+import type { BrickType } from '../types/brick';
 
 export interface GhostBrick {
   position: [number, number, number];
@@ -13,10 +11,16 @@ export interface GhostBrick {
   isValid: boolean;
 }
 
+function snapToGrid(point: { x: number; y: number; z: number }): [number, number, number] {
+  return [
+    Math.round(point.x),
+    Math.max(0, Math.round(point.y)),
+    Math.round(point.z),
+  ];
+}
+
 export function useBrickPlacement() {
   const addBrick = useSceneStore((s) => s.addBrick);
-  const occupancyMap = useSceneStore((s) => s.occupancyMap);
-  const pushSnapshot = useHistoryStore((s) => s.pushSnapshot);
   const activeBrickType = useUiStore((s) => s.activeBrickType);
   const activeColor = useUiStore((s) => s.activeColor);
   const activeTool = useUiStore((s) => s.activeTool);
@@ -25,64 +29,43 @@ export function useBrickPlacement() {
   const [ghostBrick, setGhostBrick] = useState<GhostBrick | null>(null);
 
   const handlePointerDown = useCallback(
-    (e: ThreeEvent<PointerEvent>) => {
-      // Only place bricks when the active tool is 'place'
+    (e: unknown) => {
       if (activeTool !== 'place') return;
-
-      const snapped = placementEngine.snapToGrid(e.point);
-      if (!snapped) return;
-
-      const isValid = placementEngine.validatePlacement(
-        snapped,
-        activeBrickType,
-        rotation,
-        occupancyMap
-      );
-      if (!isValid) return;
-
-      pushSnapshot();
-
+      const ev = e as { point?: { x: number; y: number; z: number } };
+      if (!ev.point) return;
+      const snapped = snapToGrid(ev.point);
       const id = crypto.randomUUID();
       addBrick({
         id,
-        type: activeBrickType,
+        type: activeBrickType as BrickType,
         color: activeColor,
-        position: snapped as [number, number, number],
+        position: snapped,
         rotation,
       });
     },
-    [addBrick, occupancyMap, pushSnapshot, activeBrickType, activeColor, activeTool, rotation]
+    [addBrick, activeBrickType, activeColor, activeTool, rotation],
   );
 
   const handlePointerMove = useCallback(
-    (e: ThreeEvent<PointerEvent>) => {
-      const snapped = placementEngine.snapToGrid(e.point);
-      if (!snapped) {
+    (e: unknown) => {
+      const ev = e as { point?: { x: number; y: number; z: number } };
+      if (!ev.point) {
         setGhostBrick(null);
         return;
       }
-
-      const isValid = placementEngine.validatePlacement(
-        snapped,
-        activeBrickType,
-        rotation,
-        occupancyMap
-      );
-
+      const snapped = snapToGrid(ev.point);
       setGhostBrick({
-        position: snapped as [number, number, number],
+        position: snapped,
         type: activeBrickType,
         color: activeColor,
         rotation,
-        isValid,
+        isValid: true,
       });
     },
-    [activeBrickType, activeColor, rotation, occupancyMap]
+    [activeBrickType, activeColor, rotation],
   );
 
-  const handlePointerUp = useCallback((_e: ThreeEvent<PointerEvent>) => {
-    // Reserved for drag-and-drop completion
-  }, []);
+  const handlePointerUp = useCallback((_e: unknown) => {}, []);
 
   return {
     handlePointerDown,

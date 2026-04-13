@@ -1,4 +1,3 @@
-import React from 'react';
 import { useUndoRedo } from '../../hooks/useUndoRedo';
 import { useSceneStore } from '../../stores/sceneStore';
 import { useSelectionStore } from '../../stores/selectionStore';
